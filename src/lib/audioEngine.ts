@@ -24,23 +24,33 @@ export class AudioEngine {
   private tremoloGains: Tone.Gain[] = [];
   
   private masterGain: Tone.Gain;
+  private masterVolume: Tone.Volume;
   private reverb: Tone.Reverb;
   private autoPanner: Tone.AutoPanner;
   private analyser: Tone.Analyser;
+  private recorder: Tone.Recorder;
   
   private isStarted = false;
+  private isRecording = false;
 
   private constructor() {
     this.masterGain = new Tone.Gain(0.8);
+    this.masterVolume = new Tone.Volume(0);
     this.reverb = new Tone.Reverb({ decay: 6, wet: 0.3 });
     this.autoPanner = new Tone.AutoPanner({ frequency: 0.2, depth: 0.5 });
     this.analyser = new Tone.Analyser('waveform', 2048);
+    this.recorder = new Tone.Recorder();
     
-    // Connect master chain: masterGain -> reverb -> autoPanner -> analyser -> destination
-    this.masterGain.connect(this.reverb);
+    // Connect master chain: masterGain -> masterVolume -> reverb -> autoPanner -> analyser -> destination
+    // Also branch to recorder
+    this.masterGain.connect(this.masterVolume);
+    this.masterVolume.connect(this.reverb);
     this.reverb.connect(this.autoPanner);
     this.autoPanner.connect(this.analyser);
     this.analyser.connect(Tone.Destination);
+    
+    // Connect to recorder (captures the final output)
+    this.autoPanner.connect(this.recorder);
     
     // Initialize 4 oscillator channels
     for (let i = 0; i < 4; i++) {
@@ -95,6 +105,38 @@ export class AudioEngine {
   public stop(): void {
     this.oscillators.forEach(osc => osc.stop());
     this.isStarted = false;
+  }
+
+  public async fadeOutAndStop(duration: number = 10): Promise<void> {
+    if (!this.isStarted) return;
+    this.masterVolume.volume.rampTo(-Infinity, duration);
+    await new Promise(resolve => setTimeout(resolve, duration * 1000));
+    this.oscillators.forEach(osc => osc.stop());
+    this.masterVolume.volume.value = 0;
+    this.isStarted = false;
+  }
+
+  // Recording methods
+  public async startRecording(): Promise<void> {
+    if (this.isRecording) return;
+    this.recorder.start();
+    this.isRecording = true;
+  }
+
+  public async stopRecording(): Promise<Blob> {
+    if (!this.isRecording) throw new Error('Not recording');
+    const recording = await this.recorder.stop();
+    this.isRecording = false;
+    return recording;
+  }
+
+  public isCurrentlyRecording(): boolean {
+    return this.isRecording;
+  }
+
+  // Master volume control
+  public setMasterVolume(volume: number): void {
+    this.masterVolume.volume.rampTo(Tone.gainToDb(volume), 0.05);
   }
 
   public setFrequency(index: number, freq: number): void {

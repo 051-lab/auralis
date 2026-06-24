@@ -32,6 +32,9 @@ interface AuralisState {
   isBinauralMode: boolean;
   binauralPreset: string | null;
   presets: Preset[];
+  timerDuration: number | null;
+  timerRemaining: number | null;
+  isRecording: boolean;
   
   setOscillatorFrequency: (index: number, freq: number) => void;
   setOscillatorGain: (index: number, gain: number) => void;
@@ -48,6 +51,9 @@ interface AuralisState {
   loadPreset: (id: string) => void;
   deletePreset: (id: string) => void;
   resetToDefaults: () => void;
+  setTimerDuration: (duration: number | null) => void;
+  setTimerRemaining: (remaining: number | null) => void;
+  setIsRecording: (recording: boolean) => void;
 }
 
 const defaultOscillators: OscillatorState[] = [
@@ -71,6 +77,9 @@ export const useAuralisStore = create<AuralisState>()(
       isBinauralMode: false,
       binauralPreset: null,
       presets: [],
+      timerDuration: null,
+      timerRemaining: null,
+      isRecording: false,
 
       setOscillatorFrequency: (index, freq) =>
         set((state) => {
@@ -125,6 +134,9 @@ export const useAuralisStore = create<AuralisState>()(
       setAutoPannerRate: (rate) => set((state) => ({ masterFX: { ...state.masterFX, autoPannerRate: rate } })),
       setAutoPannerDepth: (depth) => set((state) => ({ masterFX: { ...state.masterFX, autoPannerDepth: depth } })),
       setBinauralMode: (enabled, presetName = null) => set({ isBinauralMode: enabled, binauralPreset: presetName }),
+      setTimerDuration: (duration) => set({ timerDuration: duration }),
+      setTimerRemaining: (remaining) => set({ timerRemaining: remaining }),
+      setIsRecording: (recording) => set({ isRecording: recording }),
 
       savePreset: (name) => {
         const state = get();
@@ -161,6 +173,8 @@ export const useAuralisStore = create<AuralisState>()(
         masterFX: defaultMasterFX,
         isBinauralMode: false,
         binauralPreset: null,
+        timerDuration: null,
+        timerRemaining: null,
       }),
     }),
     {

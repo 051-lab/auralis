@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { getAudioEngine } from '@/lib/audioEngine';
 import { useAuralisStore } from '@/store/useAuralisStore';
 import { OscillatorPanel } from '@/components/OscillatorPanel';
 import { Visualizer } from '@/components/Visualizer';
+import { Timer } from '@/components/Timer';
 import { linearToLogFrequency } from '@/utils/audioMath';
 
 const BINAURAL_PRESETS = [
@@ -19,12 +20,16 @@ export default function Home() {
   const engine = getAudioEngine();
   const [isPlaying, setIsPlaying] = useState(false);
   const [presetName, setPresetName] = useState('');
+  const [isRecording, setIsRecording] = useState(false);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   
   const {
     oscillators,
     masterFX,
     isBinauralMode,
     presets,
+    timerDuration,
+    timerRemaining,
     setOscillatorFrequency,
     setOscillatorGain,
     setOscillatorWaveform,
@@ -39,16 +44,55 @@ export default function Home() {
     savePreset,
     loadPreset,
     deletePreset,
+    setTimerDuration,
+    setTimerRemaining,
+    setIsRecording: setStoreIsRecording,
   } = useAuralisStore();
+
+  // Wake Lock effect
+  useEffect(() => {
+    const requestWakeLock = async () => {
+      if (isPlaying && 'wakeLock' in navigator) {
+        try {
+          wakeLockRef.current = await navigator.wakeLock.request('screen');
+          wakeLockRef.current.addEventListener('release', () => {
+            wakeLockRef.current = null;
+          });
+        } catch (err) {
+          console.warn('Wake Lock error:', err);
+        }
+      }
+    };
+
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === 'visible' && isPlaying && 'wakeLock' in navigator) {
+        await requestWakeLock();
+      }
+    };
+
+    requestWakeLock();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      wakeLockRef.current?.release();
+    };
+  }, [isPlaying]);
 
   const handleStart = async () => {
     await engine.start();
     setIsPlaying(true);
   };
 
-  const handleStop = () => {
-    engine.stop();
+  const handleStop = async () => {
+    await engine.fadeOutAndStop(2);
     setIsPlaying(false);
+    
+    // Clear timer if running
+    if (timerRemaining !== null && timerRemaining > 0) {
+      setTimerDuration(null);
+      setTimerRemaining(null);
+    }
   };
 
   const handleFrequencyChange = (index: number, linearValue: number) => {
@@ -146,6 +190,35 @@ export default function Home() {
     }
   };
 
+  // Recording handlers
+  const handleStartRecording = async () => {
+    if (!isPlaying) return;
+    await engine.startRecording();
+    setIsRecording(true);
+    setStoreIsRecording(true);
+  };
+
+  const handleStopRecording = async () => {
+    if (!isRecording) return;
+    try {
+      const blob = await engine.stopRecording();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `auralis-${new Date().toISOString().slice(0, 19)}.wav`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setIsRecording(false);
+      setStoreIsRecording(false);
+    } catch (err) {
+      console.error('Recording error:', err);
+      setIsRecording(false);
+      setStoreIsRecording(false);
+    }
+  };
+
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 md:p-8">
       <div className="max-w-7xl mx-auto space-y-8">
@@ -180,13 +253,45 @@ export default function Home() {
               >
                 ■ Stop
               </button>
+              {!isRecording ? (
+                <button
+                  onClick={handleStartRecording}
+                  disabled={!isPlaying}
+                  className="px-6 py-3 bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl font-semibold hover:from-amber-400 hover:to-orange-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-amber-500/25"
+                >
+                  ● Record
+                </button>
+              ) : (
+                <button
+                  onClick={handleStopRecording}
+                  className="px-6 py-3 bg-gradient-to-r from-red-600 to-red-500 rounded-xl font-semibold hover:from-red-500 hover:to-red-400 transition-all shadow-lg shadow-red-600/25 animate-pulse"
+                >
+                  ■ Stop Rec
+                </button>
+              )}
             </div>
             <div className="flex items-center gap-2 text-sm">
               <div className={`w-3 h-3 rounded-full ${isPlaying ? 'bg-green-400 animate-pulse' : 'bg-slate-600'}`} />
               <span className="text-slate-400">{isPlaying ? 'Active' : 'Standby'}</span>
+              {isRecording && (
+                <>
+                  <div className="w-3 h-3 rounded-full bg-red-500 animate-pulse ml-2" />
+                  <span className="text-red-400 ml-1">REC</span>
+                </>
+              )}
             </div>
           </div>
         </section>
+
+        {/* Timer Section */}
+        <Timer
+          duration={timerDuration}
+          remaining={timerRemaining}
+          isPlaying={isPlaying}
+          onSetDuration={setTimerDuration}
+          onSetRemaining={setTimerRemaining}
+          onStop={handleStop}
+        />
 
         {/* Master FX Section */}
         <section className="bg-slate-900/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50">
