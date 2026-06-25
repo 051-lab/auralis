@@ -7,6 +7,7 @@ import { OscillatorPanel } from '@/components/OscillatorPanel';
 import { Visualizer } from '@/components/Visualizer';
 import { Timer } from '@/components/Timer';
 import { linearToLogFrequency } from '@/utils/audioMath';
+import { analytics } from '@/lib/analytics';
 
 const BINAURAL_PRESETS = [
   { name: 'Delta Sleep', freq: 2 },
@@ -49,6 +50,23 @@ export default function Home() {
     setIsRecording: setStoreIsRecording,
   } = useAuralisStore();
 
+  // Track page view on mount
+  useEffect(() => {
+    analytics.trackPageView();
+    
+    // Check for preset in URL and load it
+    const urlParams = new URLSearchParams(window.location.search);
+    const presetParam = urlParams.get('preset');
+    if (presetParam) {
+      try {
+        // Preset loading logic will be handled by store initialization
+        console.log('Preset detected in URL:', presetParam);
+      } catch (err) {
+        console.warn('Failed to load preset from URL:', err);
+      }
+    }
+  }, []);
+
   // Wake Lock effect
   useEffect(() => {
     const requestWakeLock = async () => {
@@ -82,11 +100,13 @@ export default function Home() {
   const handleStart = async () => {
     await engine.start();
     setIsPlaying(true);
+    analytics.trackAudioStart();
   };
 
   const handleStop = async () => {
     await engine.fadeOutAndStop(2);
     setIsPlaying(false);
+    analytics.trackAudioStop('manual');
     
     // Clear timer if running
     if (timerRemaining !== null && timerRemaining > 0) {
@@ -147,6 +167,7 @@ export default function Home() {
   };
 
   const activateBinaural = (baseFreq: number, beatFreq: number) => {
+    const presetName = BINAURAL_PRESETS.find(p => p.freq === beatFreq)?.name || 'Custom';
     setBinauralMode(true, `${baseFreq}Hz + ${beatFreq}Hz`);
     
     // Set osc 1: base freq, hard left
@@ -172,6 +193,9 @@ export default function Home() {
     setOscillatorGain(3, 0);
     engine.setGain(2, 0);
     engine.setGain(3, 0);
+
+    // Track binaural activation
+    analytics.trackBinauralActivate(presetName, beatFreq);
   };
 
   const exitBinaural = () => {
@@ -186,6 +210,7 @@ export default function Home() {
   const handleSavePreset = () => {
     if (presetName.trim()) {
       savePreset(presetName.trim());
+      analytics.trackPresetSave(presetName.trim());
       setPresetName('');
     }
   };
@@ -212,6 +237,9 @@ export default function Home() {
       URL.revokeObjectURL(url);
       setIsRecording(false);
       setStoreIsRecording(false);
+      
+      // Track export (estimate duration from recording state)
+      analytics.trackExport();
     } catch (err) {
       console.error('Recording error:', err);
       setIsRecording(false);
@@ -435,13 +463,19 @@ export default function Home() {
                   </div>
                   <div className="flex gap-2">
                     <button
-                      onClick={() => loadPreset(preset.id)}
+                      onClick={() => {
+                        loadPreset(preset.id);
+                        analytics.trackPresetLoad(preset.name, 'local');
+                      }}
                       className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs font-medium transition-colors"
                     >
                       Load
                     </button>
                     <button
-                      onClick={() => deletePreset(preset.id)}
+                      onClick={() => {
+                        deletePreset(preset.id);
+                        analytics.trackPresetDelete(preset.name);
+                      }}
                       className="px-3 py-1 bg-red-900/50 hover:bg-red-800/50 text-red-400 rounded text-xs font-medium transition-colors"
                     >
                       Delete

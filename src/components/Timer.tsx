@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef } from 'react';
 import { getAudioEngine } from '@/lib/audioEngine';
+import { analytics } from '@/lib/analytics';
 
 interface TimerProps {
   duration: number | null;
@@ -52,6 +53,11 @@ export const Timer: React.FC<TimerProps> = ({
   }, [duration, remaining, isPlaying]);
 
   const handleTimerComplete = async () => {
+    // Track timer completion
+    if (duration) {
+      analytics.trackTimerComplete(duration);
+    }
+
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
@@ -61,6 +67,7 @@ export const Timer: React.FC<TimerProps> = ({
     await engineRef.current.fadeOutAndStop(10);
     onSetRemaining(null);
     onSetDuration(null);
+    analytics.trackAudioStop('timer_complete');
     onStop();
   };
 
