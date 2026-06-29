@@ -22,7 +22,12 @@ interface OscillatorPanelProps {
   onTremoloDepthChange: (depth: number) => void;
 }
 
-const WAVEFORMS: WaveformType[] = ['sine', 'square', 'sawtooth', 'triangle'];
+const WAVEFORMS: Array<{ value: WaveformType; label: string; title: string }> = [
+  { value: 'sine', label: 'Si', title: 'Sine' },
+  { value: 'square', label: 'Sq', title: 'Square' },
+  { value: 'sawtooth', label: 'Sa', title: 'Sawtooth' },
+  { value: 'triangle', label: 'Tr', title: 'Triangle' },
+];
 
 const clamp = (value: number, min: number, max: number): number => {
   if (Number.isNaN(value)) return min;
@@ -83,18 +88,19 @@ export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
       <div className="flex items-center justify-between mb-4">
         <h3 className={`text-lg font-bold ${color.accent}`}>Oscillator {index + 1}</h3>
         <div className="flex gap-1">
-          {WAVEFORMS.map((w) => (
+          {WAVEFORMS.map((option) => (
             <button
-              key={w}
-              onClick={() => onWaveformChange(w)}
-              className={`p-1.5 rounded-lg text-xs font-medium transition-all ${
-                waveform === w
+              key={option.value}
+              onClick={() => onWaveformChange(option.value)}
+              className={`min-w-8 p-1.5 rounded-lg text-xs font-medium transition-all ${
+                waveform === option.value
                   ? `bg-gradient-to-r ${color.primary} text-white shadow-md`
                   : 'bg-slate-800/50 text-slate-400 hover:bg-slate-700/50'
               }`}
-              title={w}
+              title={option.title}
+              aria-label={`Set oscillator ${index + 1} waveform to ${option.title}`}
             >
-              {w.slice(0, 1).toUpperCase()}
+              {option.label}
             </button>
           ))}
         </div>

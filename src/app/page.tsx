@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { getAudioEngine } from '@/lib/audioEngine';
 import type { NoiseType, WaveformType } from '@/lib/audioEngine';
 import { useAuralisStore } from '@/store/useAuralisStore';
-import type { SharedPresetPayload } from '@/store/useAuralisStore';
+import type { OscillatorState, SharedPresetPayload } from '@/store/useAuralisStore';
 import { OscillatorPanel } from '@/components/OscillatorPanel';
 import { Visualizer } from '@/components/Visualizer';
 import { Timer } from '@/components/Timer';
@@ -25,6 +25,13 @@ const BINAURAL_PRESETS = [
 ];
 
 const NOISE_TYPES: NoiseType[] = ['brown', 'pink', 'white'];
+
+function getRecordingExtension(mimeType: string): string {
+  if (mimeType.includes('wav')) return 'wav';
+  if (mimeType.includes('mpeg') || mimeType.includes('mp3')) return 'mp3';
+  if (mimeType.includes('ogg')) return 'ogg';
+  return 'webm';
+}
 
 function formatTime(totalSeconds: number | null | undefined): string {
   const safeSeconds = Math.max(0, Math.floor(totalSeconds ?? 0));
@@ -66,8 +73,10 @@ export default function Home() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [presetName, setPresetName] = useState('');
   const [isRecording, setIsRecording] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [shareMessage, setShareMessage] = useState<string | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const binauralSnapshotRef = useRef<OscillatorState[] | null>(null);
 
   const {
     oscillators,
@@ -294,6 +303,7 @@ export default function Home() {
   const activateBinaural = (baseFreq: number, beatFreq: number) => {
     const activePresetName = BINAURAL_PRESETS.find((preset) => preset.freq === beatFreq)?.name ?? 'Custom';
 
+    binauralSnapshotRef.current = oscillators.map((oscillator) => ({ ...oscillator }));
     setBinauralMode(true, `${baseFreq}Hz + ${beatFreq}Hz`);
 
     setOscillatorFrequency(0, baseFreq);
@@ -308,9 +318,27 @@ export default function Home() {
     setOscillatorGain(3, 0);
 
     analytics.trackBinauralActivate(activePresetName, beatFreq);
+    setStatusMessage(`Binaural mode activated: ${activePresetName}. Previous oscillator settings saved.`);
   };
 
   const exitBinaural = () => {
+    const snapshot = binauralSnapshotRef.current;
+
+    if (snapshot) {
+      snapshot.forEach((oscillator, index) => {
+        setOscillatorFrequency(index, oscillator.frequency);
+        setOscillatorGain(index, oscillator.gain);
+        setOscillatorWaveform(index, oscillator.waveform);
+        setOscillatorPan(index, oscillator.pan);
+        setOscillatorTremoloEnabled(index, oscillator.tremoloEnabled);
+        setOscillatorTremoloRate(index, oscillator.tremoloRate);
+        setOscillatorTremoloDepth(index, oscillator.tremoloDepth);
+      });
+
+      binauralSnapshotRef.current = null;
+      setStatusMessage('Restored oscillator settings from before binaural mode.');
+    }
+
     setBinauralMode(false);
   };
 
@@ -367,6 +395,7 @@ export default function Home() {
     await activeEngine.startRecording();
     setIsRecording(true);
     setStoreIsRecording(true);
+    setStatusMessage('Recording started.');
   };
 
   const handleStopRecording = async () => {
@@ -377,9 +406,12 @@ export default function Home() {
       const blob = await activeEngine.stopRecording();
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
+      const extension = getRecordingExtension(blob.type);
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+      const filename = `auralis-${timestamp}.${extension}`;
 
       anchor.href = url;
-      anchor.download = `auralis-${new Date().toISOString().slice(0, 19)}.wav`;
+      anchor.download = filename;
 
       document.body.appendChild(anchor);
       anchor.click();
@@ -390,10 +422,12 @@ export default function Home() {
       setIsRecording(false);
       setStoreIsRecording(false);
       analytics.trackExport();
+      setStatusMessage(`Recording exported: ${filename}`);
     } catch (err) {
       console.error('Recording error:', err);
       setIsRecording(false);
       setStoreIsRecording(false);
+      setStatusMessage('Recording export failed.');
     }
   };
 
@@ -410,65 +444,73 @@ export default function Home() {
         </header>
 
         <section className="bg-slate-900/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
-            <div className="flex flex-wrap gap-4">
-              <button
-                onClick={handleStart}
-                disabled={isPlaying}
-                className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-xl font-semibold hover:from-cyan-400 hover:to-blue-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-cyan-500/25"
-              >
-                ▶ Start Audio
-              </button>
-
-              <button
-                onClick={handleStop}
-                disabled={!isPlaying}
-                className="px-6 py-3 bg-gradient-to-r from-red-500 to-pink-500 rounded-xl font-semibold hover:from-red-400 hover:to-pink-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-red-500/25"
-              >
-                ■ Stop
-              </button>
-
-              {!isRecording ? (
+          <div className="space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+              <div className="flex flex-wrap gap-4">
                 <button
-                  onClick={handleStartRecording}
+                  onClick={handleStart}
+                  disabled={isPlaying}
+                  className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-xl font-semibold hover:from-cyan-400 hover:to-blue-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-cyan-500/25"
+                >
+                  ▶ Start Audio
+                </button>
+
+                <button
+                  onClick={handleStop}
                   disabled={!isPlaying}
-                  className="px-6 py-3 bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl font-semibold hover:from-amber-400 hover:to-orange-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-amber-500/25"
+                  className="px-6 py-3 bg-gradient-to-r from-red-500 to-pink-500 rounded-xl font-semibold hover:from-red-400 hover:to-pink-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-red-500/25"
                 >
-                  ● Record
+                  ■ Stop
                 </button>
-              ) : (
-                <button
-                  onClick={handleStopRecording}
-                  className="px-6 py-3 bg-gradient-to-r from-red-600 to-red-500 rounded-xl font-semibold hover:from-red-500 hover:to-red-400 transition-all shadow-lg shadow-red-600/25 animate-pulse"
-                >
-                  ■ Stop Rec
-                </button>
-              )}
-            </div>
 
-            <div className="flex flex-wrap items-center gap-4 text-sm">
-              <div className="flex items-center gap-2">
-                <div
-                  className={`w-3 h-3 rounded-full ${
-                    isPlaying ? 'bg-green-400 animate-pulse' : 'bg-slate-600'
-                  }`}
-                />
-                <span className="text-slate-400">{isPlaying ? 'Active' : 'Standby'}</span>
+                {!isRecording ? (
+                  <button
+                    onClick={handleStartRecording}
+                    disabled={!isPlaying}
+                    className="px-6 py-3 bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl font-semibold hover:from-amber-400 hover:to-orange-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-amber-500/25"
+                  >
+                    ● Record
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleStopRecording}
+                    className="px-6 py-3 bg-gradient-to-r from-red-600 to-red-500 rounded-xl font-semibold hover:from-red-500 hover:to-red-400 transition-all shadow-lg shadow-red-600/25 animate-pulse"
+                  >
+                    ■ Stop Rec
+                  </button>
+                )}
               </div>
 
-              {isRecording && (
+              <div className="flex flex-wrap items-center gap-4 text-sm">
                 <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-red-500 animate-pulse" />
-                  <span className="text-red-400">REC</span>
+                  <div
+                    className={`w-3 h-3 rounded-full ${
+                      isPlaying ? 'bg-green-400 animate-pulse' : 'bg-slate-600'
+                    }`}
+                  />
+                  <span className="text-slate-400">{isPlaying ? 'Active' : 'Standby'}</span>
                 </div>
-              )}
 
-              {timerRemaining !== null && (
-                <div className="px-3 py-1 bg-slate-800 rounded-lg border border-slate-700 text-cyan-300 font-mono">
-                  {formatTime(timerRemaining)}
-                </div>
-              )}
+                {isRecording && (
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-red-500 animate-pulse" />
+                    <span className="text-red-400">REC</span>
+                  </div>
+                )}
+
+                {timerRemaining !== null && (
+                  <div className="px-3 py-1 bg-slate-800 rounded-lg border border-slate-700 text-cyan-300 font-mono">
+                    {formatTime(timerRemaining)}
+                  </div>
+                )}
+              </div>
             </div>
+
+            {statusMessage && (
+              <p className="text-sm text-cyan-300 bg-cyan-950/30 border border-cyan-800/50 rounded-lg px-4 py-2">
+                {statusMessage}
+              </p>
+            )}
           </div>
         </section>
 
