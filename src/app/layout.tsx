@@ -7,8 +7,10 @@ const inter = Inter({ subsets: ['latin'] });
 
 const analyticsEnabled = process.env.NEXT_PUBLIC_ANALYTICS_ENABLED === 'true';
 const analyticsDomain = process.env.NEXT_PUBLIC_ANALYTICS_ID || '';
+const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
 export const metadata: Metadata = {
+  metadataBase: new URL(appUrl),
   title: 'Auralis - Somatic Frequency Generator & Binaural Entrainment',
   description: 'Professional browser-based frequency generator with binaural beats, ambient noise layers, and real-time visualization. Nervous system regulation through high-fidelity sound.',
   keywords: ['binaural beats', 'frequency generator', 'somatic healing', 'meditation', 'sound therapy', 'brainwave entrainment'],
@@ -17,7 +19,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: 'website',
     locale: 'en_US',
-    url: 'https://auralis.app',
+    url: appUrl,
     siteName: 'Auralis',
     title: 'Auralis - Somatic Frequency Generator',
     description: 'Real-time frequency generator with binaural beats for meditation, focus, and sleep.',
@@ -40,6 +42,11 @@ export const metadata: Metadata = {
   robots: {
     index: true,
     follow: true,
+  },
+  manifest: '/manifest.webmanifest',
+  icons: {
+    icon: '/favicon.svg',
+    apple: '/icon-192.png',
   },
 };
 

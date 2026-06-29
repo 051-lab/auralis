@@ -28,40 +28,13 @@ interface AnalyticsEventProps {
   [key: string]: string | number | boolean;
 }
 
+type PlausibleFunction = (event: AnalyticsEvent, options?: { props?: AnalyticsEventProps }) => void;
+
 class AnalyticsService {
   private enabled: boolean;
-  private domain: string;
-  private isInitialized: boolean = false;
 
   constructor() {
     this.enabled = process.env.NEXT_PUBLIC_ANALYTICS_ENABLED === 'true';
-    this.domain = process.env.NEXT_PUBLIC_ANALYTICS_ID || '';
-    
-    // Only initialize in browser
-    if (typeof window !== 'undefined' && this.enabled && this.domain) {
-      this.initialize();
-    }
-  }
-
-  private initialize() {
-    if (this.isInitialized) return;
-
-    // Dynamically load Plausible script
-    const script = document.createElement('script');
-    script.defer = true;
-    script.dataset.domain = this.domain;
-    script.src = 'https://plausible.io/js/script.js';
-    
-    script.onerror = () => {
-      console.warn('[Analytics] Failed to load Plausible script');
-    };
-
-    document.head.appendChild(script);
-    this.isInitialized = true;
-
-    if (process.env.NODE_ENV === 'development') {
-      console.log('[Analytics] Initialized with domain:', this.domain);
-    }
   }
 
   /**
@@ -85,8 +58,8 @@ class AnalyticsService {
     }
 
     // Send event to Plausible
-    if (typeof window !== 'undefined' && this.isInitialized) {
-      const plausible = (window as any).plausible;
+    if (typeof window !== 'undefined') {
+      const plausible = (window as Window & { plausible?: PlausibleFunction }).plausible;
       if (plausible) {
         plausible(event, { props });
       }

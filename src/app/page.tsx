@@ -2,14 +2,18 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { getAudioEngine } from '@/lib/audioEngine';
-import type { NoiseType, WaveformType } from '@/lib/audioEngine';
+import type { NoiseType, RecordingMode, WaveformType } from '@/lib/audioEngine';
 import { useAuralisStore } from '@/store/useAuralisStore';
-import type { OscillatorState, SharedPresetPayload } from '@/store/useAuralisStore';
+import type { MasterFXState, OscillatorState, SharedPresetPayload } from '@/store/useAuralisStore';
 import { OscillatorPanel } from '@/components/OscillatorPanel';
 import { Visualizer } from '@/components/Visualizer';
 import { Timer } from '@/components/Timer';
 import { linearToLogFrequency } from '@/utils/audioMath';
+import { clamp } from '@/utils/math';
+import { decodeSharedPreset, encodeSharedPreset } from '@/utils/sharePreset';
 import { analytics } from '@/lib/analytics';
+import { useAnalytics } from '@/lib/useAnalytics';
+import packageJson from '../../package.json';
 
 type AudioEngineInstance = ReturnType<typeof getAudioEngine>;
 
@@ -25,6 +29,7 @@ const BINAURAL_PRESETS = [
 ];
 
 const NOISE_TYPES: NoiseType[] = ['brown', 'pink', 'white'];
+const MAX_SHARE_URL_LENGTH = 2000;
 
 function getRecordingExtension(mimeType: string): string {
   if (mimeType.includes('wav')) return 'wav';
@@ -41,27 +46,8 @@ function formatTime(totalSeconds: number | null | undefined): string {
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 }
 
-function encodeBase64Unicode(value: string): string {
-  const bytes = new TextEncoder().encode(value);
-  let binary = '';
-
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte);
-  });
-
-  return btoa(binary);
-}
-
-function decodeBase64Unicode(value: string): string {
-  const binary = atob(value);
-  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-
-  return new TextDecoder().decode(bytes);
-}
-
 function clampNumber(value: number, min: number, max: number): number {
-  if (Number.isNaN(value)) return min;
-  return Math.max(min, Math.min(max, value));
+  return clamp(value, min, max);
 }
 
 function percentInputValue(value: number): number {
@@ -72,11 +58,23 @@ export default function Home() {
   const [engine, setEngine] = useState<AudioEngineInstance | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [presetName, setPresetName] = useState('');
-  const [isRecording, setIsRecording] = useState(false);
+  const [recordingMode, setRecordingMode] = useState<RecordingMode>('wet');
+  const [binauralBaseFrequency, setBinauralBaseFrequency] = useState(400);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [shareMessage, setShareMessage] = useState<string | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const binauralSnapshotRef = useRef<OscillatorState[] | null>(null);
+  const binauralMasterFXSnapshotRef = useRef<MasterFXState | null>(null);
+  const previousSyncRef = useRef<{
+    oscillators: OscillatorState[];
+    masterFX: MasterFXState;
+    noiseType: NoiseType;
+    noiseGain: number;
+    noiseEnabled: boolean;
+    isPlaying: boolean;
+  } | null>(null);
+
+  useAnalytics();
 
   const {
     oscillators,
@@ -86,6 +84,7 @@ export default function Home() {
     presets,
     timerDuration,
     timerRemaining,
+    isRecording,
     noiseEnabled,
     noiseType,
     noiseGain,
@@ -96,7 +95,9 @@ export default function Home() {
     setOscillatorTremoloEnabled,
     setOscillatorTremoloRate,
     setOscillatorTremoloDepth,
+    setMasterVolume,
     setReverbWet,
+    setReverbDecay,
     setAutoPannerRate,
     setAutoPannerDepth,
     setBinauralMode,
@@ -105,7 +106,7 @@ export default function Home() {
     deletePreset,
     setTimerDuration,
     setTimerRemaining,
-    setIsRecording: setStoreIsRecording,
+    setIsRecording,
     setNoiseEnabled,
     setNoiseType,
     setNoiseGain,
@@ -127,16 +128,13 @@ export default function Home() {
   };
 
   useEffect(() => {
-    analytics.trackPageView();
-
     const urlParams = new URLSearchParams(window.location.search);
     const presetParam = urlParams.get('preset');
 
     if (!presetParam) return;
 
     try {
-      const decodedJson = decodeBase64Unicode(presetParam);
-      const decodedPreset = JSON.parse(decodedJson) as SharedPresetPayload;
+      const decodedPreset = decodeSharedPreset(presetParam);
 
       applySharedPreset(decodedPreset);
       analytics.trackPresetLoad(decodedPreset.name ?? 'Shared Preset', 'url');
@@ -150,27 +148,82 @@ export default function Home() {
   useEffect(() => {
     if (!engine) return;
 
+    const previous = previousSyncRef.current;
+
     oscillators.forEach((oscillator, index) => {
-      engine.setFrequency(index, oscillator.frequency);
-      engine.setGain(index, oscillator.gain);
-      engine.setWaveform(index, oscillator.waveform);
-      engine.setPan(index, oscillator.pan);
-      engine.setTremoloRate(index, oscillator.tremoloRate);
-      engine.setTremoloDepth(index, oscillator.tremoloDepth);
-      engine.setTremoloEnabled(index, oscillator.tremoloEnabled);
+      const previousOscillator = previous?.oscillators[index];
+
+      if (!previousOscillator || previousOscillator.frequency !== oscillator.frequency) {
+        engine.setFrequency(index, oscillator.frequency);
+      }
+
+      if (!previousOscillator || previousOscillator.gain !== oscillator.gain) {
+        engine.setGain(index, oscillator.gain);
+      }
+
+      if (!previousOscillator || previousOscillator.waveform !== oscillator.waveform) {
+        engine.setWaveform(index, oscillator.waveform);
+      }
+
+      if (!previousOscillator || previousOscillator.pan !== oscillator.pan) {
+        engine.setPan(index, oscillator.pan);
+      }
+
+      if (!previousOscillator || previousOscillator.tremoloRate !== oscillator.tremoloRate) {
+        engine.setTremoloRate(index, oscillator.tremoloRate);
+      }
+
+      if (!previousOscillator || previousOscillator.tremoloDepth !== oscillator.tremoloDepth) {
+        engine.setTremoloDepth(index, oscillator.tremoloDepth);
+      }
+
+      if (!previousOscillator || previousOscillator.tremoloEnabled !== oscillator.tremoloEnabled) {
+        engine.setTremoloEnabled(index, oscillator.tremoloEnabled);
+      }
     });
 
-    engine.setReverbWet(masterFX.reverbWet);
-    engine.setAutoPannerRate(masterFX.autoPannerRate);
-    engine.setAutoPannerDepth(masterFX.autoPannerDepth);
-    engine.setNoiseType(noiseType);
-    engine.setNoiseGain(noiseGain);
+    if (!previous || previous.masterFX.masterVolume !== masterFX.masterVolume) {
+      engine.setMasterVolume(masterFX.masterVolume);
+    }
+
+    if (!previous || previous.masterFX.reverbWet !== masterFX.reverbWet) {
+      engine.setReverbWet(masterFX.reverbWet);
+    }
+
+    if (!previous || previous.masterFX.reverbDecay !== masterFX.reverbDecay) {
+      engine.setReverbDecay(masterFX.reverbDecay);
+    }
+
+    if (!previous || previous.masterFX.autoPannerRate !== masterFX.autoPannerRate) {
+      engine.setAutoPannerRate(masterFX.autoPannerRate);
+    }
+
+    if (!previous || previous.masterFX.autoPannerDepth !== masterFX.autoPannerDepth) {
+      engine.setAutoPannerDepth(masterFX.autoPannerDepth);
+    }
+
+    if (!previous || previous.noiseType !== noiseType) {
+      engine.setNoiseType(noiseType);
+    }
+
+    if (!previous || previous.noiseGain !== noiseGain) {
+      engine.setNoiseGain(noiseGain);
+    }
 
     if (isPlaying && noiseEnabled && noiseGain > 0) {
       engine.startNoise();
     } else {
       engine.stopNoise();
     }
+
+    previousSyncRef.current = {
+      oscillators: oscillators.map((oscillator) => ({ ...oscillator })),
+      masterFX: { ...masterFX },
+      noiseType,
+      noiseGain,
+      noiseEnabled,
+      isPlaying,
+    };
   }, [engine, oscillators, masterFX, noiseEnabled, noiseType, noiseGain, isPlaying]);
 
   useEffect(() => {
@@ -202,6 +255,52 @@ export default function Home() {
     };
   }, [isPlaying]);
 
+  useEffect(() => {
+    const isTypingTarget = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLElement)) return false;
+
+      return ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable;
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) return;
+
+      if (event.code === 'Space') {
+        event.preventDefault();
+        if (isPlaying) {
+          handleStop();
+        } else {
+          handleStart();
+        }
+      }
+
+      if (event.key.toLowerCase() === 'r') {
+        event.preventDefault();
+        if (isRecording) {
+          handleStopRecording();
+        } else if (isPlaying) {
+          handleStartRecording();
+        }
+      }
+
+      if (event.key === 'Escape' && isBinauralMode) {
+        event.preventDefault();
+        exitBinaural();
+      }
+
+      if (event.key.toLowerCase() === 's' && presetName.trim()) {
+        event.preventDefault();
+        handleSavePreset();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  });
+
   const handleStart = async () => {
     const activeEngine = ensureEngine();
 
@@ -227,6 +326,17 @@ export default function Home() {
       setTimerDuration(null);
       setTimerRemaining(null);
     }
+  };
+
+  const handleTimerComplete = async () => {
+    const activeEngine = ensureEngine();
+
+    await activeEngine.fadeOutAndStop(10);
+    setIsPlaying(false);
+    setTimerDuration(null);
+    setTimerRemaining(null);
+    analytics.trackAudioStop('timer_complete');
+    setStatusMessage('Session timer complete. Audio faded out smoothly.');
   };
 
   const handleFrequencyChange = (index: number, linearValue: number) => {
@@ -258,8 +368,16 @@ export default function Home() {
     setOscillatorTremoloDepth(index, depth);
   };
 
+  const handleMasterVolumeChange = (volume: number) => {
+    setMasterVolume(volume);
+  };
+
   const handleReverbChange = (wet: number) => {
     setReverbWet(wet);
+  };
+
+  const handleReverbDecayChange = (decay: number) => {
+    setReverbDecay(decay);
   };
 
   const handleAutoPannerRateChange = (rate: number) => {
@@ -302,15 +420,20 @@ export default function Home() {
 
   const activateBinaural = (baseFreq: number, beatFreq: number) => {
     const activePresetName = BINAURAL_PRESETS.find((preset) => preset.freq === beatFreq)?.name ?? 'Custom';
+    const safeBaseFrequency = clampNumber(baseFreq, 20, 20000 - beatFreq);
 
     binauralSnapshotRef.current = oscillators.map((oscillator) => ({ ...oscillator }));
-    setBinauralMode(true, `${baseFreq}Hz + ${beatFreq}Hz`);
+    binauralMasterFXSnapshotRef.current = { ...masterFX };
+    setBinauralMode(true, `${safeBaseFrequency}Hz + ${beatFreq}Hz`);
 
-    setOscillatorFrequency(0, baseFreq);
+    setReverbWet(0);
+    setAutoPannerDepth(0);
+
+    setOscillatorFrequency(0, safeBaseFrequency);
     setOscillatorPan(0, -1);
     setOscillatorGain(0, 0.5);
 
-    setOscillatorFrequency(1, baseFreq + beatFreq);
+    setOscillatorFrequency(1, safeBaseFrequency + beatFreq);
     setOscillatorPan(1, 1);
     setOscillatorGain(1, 0.5);
 
@@ -318,11 +441,14 @@ export default function Home() {
     setOscillatorGain(3, 0);
 
     analytics.trackBinauralActivate(activePresetName, beatFreq);
-    setStatusMessage(`Binaural mode activated: ${activePresetName}. Previous oscillator settings saved.`);
+    setStatusMessage(
+      `Binaural mode activated: ${activePresetName}. Reverb and panning depth disabled until exit.`
+    );
   };
 
   const exitBinaural = () => {
     const snapshot = binauralSnapshotRef.current;
+    const masterFXSnapshot = binauralMasterFXSnapshotRef.current;
 
     if (snapshot) {
       snapshot.forEach((oscillator, index) => {
@@ -336,8 +462,18 @@ export default function Home() {
       });
 
       binauralSnapshotRef.current = null;
-      setStatusMessage('Restored oscillator settings from before binaural mode.');
     }
+
+    if (masterFXSnapshot) {
+      setMasterVolume(masterFXSnapshot.masterVolume);
+      setReverbWet(masterFXSnapshot.reverbWet);
+      setReverbDecay(masterFXSnapshot.reverbDecay);
+      setAutoPannerRate(masterFXSnapshot.autoPannerRate);
+      setAutoPannerDepth(masterFXSnapshot.autoPannerDepth);
+      binauralMasterFXSnapshotRef.current = null;
+    }
+
+    setStatusMessage('Restored oscillator and master effect settings from before binaural mode.');
 
     setBinauralMode(false);
   };
@@ -368,11 +504,14 @@ export default function Home() {
         createdAt: Date.now(),
       };
 
-      const encodedPreset = encodeURIComponent(
-        encodeBase64Unicode(JSON.stringify(sharedPreset))
-      );
+      const encodedPreset = encodeURIComponent(encodeSharedPreset(sharedPreset));
 
       const shareUrl = `${window.location.origin}${window.location.pathname}?preset=${encodedPreset}`;
+
+      if (shareUrl.length > MAX_SHARE_URL_LENGTH) {
+        setShareMessage('Preset is too large to share as a URL.');
+        return;
+      }
 
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(shareUrl);
@@ -392,10 +531,9 @@ export default function Home() {
 
     const activeEngine = ensureEngine();
 
-    await activeEngine.startRecording();
+    await activeEngine.startRecording(recordingMode);
     setIsRecording(true);
-    setStoreIsRecording(true);
-    setStatusMessage('Recording started.');
+    setStatusMessage(`Recording started (${recordingMode} mix).`);
   };
 
   const handleStopRecording = async () => {
@@ -408,7 +546,7 @@ export default function Home() {
       const anchor = document.createElement('a');
       const extension = getRecordingExtension(blob.type);
       const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-      const filename = `auralis-${timestamp}.${extension}`;
+      const filename = `auralis-${timestamp}-${recordingMode}.${extension}`;
 
       anchor.href = url;
       anchor.download = filename;
@@ -420,13 +558,11 @@ export default function Home() {
       URL.revokeObjectURL(url);
 
       setIsRecording(false);
-      setStoreIsRecording(false);
       analytics.trackExport();
       setStatusMessage(`Recording exported: ${filename}`);
     } catch (err) {
       console.error('Recording error:', err);
       setIsRecording(false);
-      setStoreIsRecording(false);
       setStatusMessage('Recording export failed.');
     }
   };
@@ -450,6 +586,7 @@ export default function Home() {
                 <button
                   onClick={handleStart}
                   disabled={isPlaying}
+                  aria-label="Start audio playback"
                   className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-xl font-semibold hover:from-cyan-400 hover:to-blue-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-cyan-500/25"
                 >
                   ▶ Start Audio
@@ -458,6 +595,7 @@ export default function Home() {
                 <button
                   onClick={handleStop}
                   disabled={!isPlaying}
+                  aria-label="Stop audio playback"
                   className="px-6 py-3 bg-gradient-to-r from-red-500 to-pink-500 rounded-xl font-semibold hover:from-red-400 hover:to-pink-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-red-500/25"
                 >
                   ■ Stop
@@ -467,6 +605,7 @@ export default function Home() {
                   <button
                     onClick={handleStartRecording}
                     disabled={!isPlaying}
+                    aria-label={`Start ${recordingMode} recording`}
                     className="px-6 py-3 bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl font-semibold hover:from-amber-400 hover:to-orange-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-amber-500/25"
                   >
                     ● Record
@@ -474,6 +613,7 @@ export default function Home() {
                 ) : (
                   <button
                     onClick={handleStopRecording}
+                    aria-label="Stop recording and export audio"
                     className="px-6 py-3 bg-gradient-to-r from-red-600 to-red-500 rounded-xl font-semibold hover:from-red-500 hover:to-red-400 transition-all shadow-lg shadow-red-600/25 animate-pulse"
                   >
                     ■ Stop Rec
@@ -483,18 +623,32 @@ export default function Home() {
 
               <div className="flex flex-wrap items-center gap-4 text-sm">
                 <div className="flex items-center gap-2">
+                  <span className="text-slate-500">Record</span>
+                  <select
+                    value={recordingMode}
+                    onChange={(event) => setRecordingMode(event.target.value as RecordingMode)}
+                    disabled={isRecording}
+                    aria-label="Recording mix mode"
+                    className="rounded-lg border border-slate-700 bg-slate-950/70 px-2 py-1 text-xs text-slate-100 outline-none focus:border-cyan-500 disabled:opacity-50"
+                  >
+                    <option value="wet">Wet</option>
+                    <option value="dry">Dry</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-2">
                   <div
                     className={`w-3 h-3 rounded-full ${
                       isPlaying ? 'bg-green-400 animate-pulse' : 'bg-slate-600'
                     }`}
                   />
-                  <span className="text-slate-400">{isPlaying ? 'Active' : 'Standby'}</span>
+                  <span className="text-slate-400">Audio {isPlaying ? 'Active' : 'Standby'}</span>
                 </div>
 
                 {isRecording && (
                   <div className="flex items-center gap-2">
                     <div className="w-3 h-3 rounded-full bg-red-500 animate-pulse" />
-                    <span className="text-red-400">REC</span>
+                    <span className="text-red-400">REC {recordingMode.toUpperCase()}</span>
                   </div>
                 )}
 
@@ -507,10 +661,51 @@ export default function Home() {
             </div>
 
             {statusMessage && (
-              <p className="text-sm text-cyan-300 bg-cyan-950/30 border border-cyan-800/50 rounded-lg px-4 py-2">
+              <p
+                className="text-sm text-cyan-300 bg-cyan-950/30 border border-cyan-800/50 rounded-lg px-4 py-2"
+                aria-live="polite"
+              >
                 {statusMessage}
               </p>
             )}
+
+            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(260px,360px)] gap-4">
+              <p className="text-xs leading-5 text-slate-500">
+                Use stereo headphones for binaural modes. Start with low volume, stop if the sound
+                feels uncomfortable, and do not use Auralis as medical treatment or diagnosis.
+              </p>
+
+              <div className="space-y-2">
+                <label className="text-sm text-slate-400 flex items-center justify-between gap-3">
+                  <span>Master Volume</span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={percentInputValue(masterFX.masterVolume)}
+                      onChange={(event) =>
+                        handlePercentInputChange(event.target.value, handleMasterVolumeChange)
+                      }
+                      className={numberInputClass}
+                      aria-label="Master volume percent"
+                    />
+                    <span>%</span>
+                  </div>
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={masterFX.masterVolume}
+                  onChange={(event) => handleMasterVolumeChange(parseFloat(event.target.value))}
+                  className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                  aria-label="Master volume slider"
+                />
+              </div>
+            </div>
           </div>
         </section>
 
@@ -522,7 +717,7 @@ export default function Home() {
           isPlaying={isPlaying}
           onSetDuration={setTimerDuration}
           onSetRemaining={setTimerRemaining}
-          onStop={handleStop}
+          onComplete={handleTimerComplete}
         />
 
         <section className="bg-slate-900/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50">
@@ -602,7 +797,7 @@ export default function Home() {
         <section className="bg-slate-900/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50">
           <h2 className="text-lg font-semibold mb-4 text-slate-200">Master Effects</h2>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
             <div className="space-y-2">
               <label className="text-sm text-slate-400 flex items-center justify-between gap-3">
                 <span>Reverb Wet/Dry</span>
@@ -630,6 +825,41 @@ export default function Home() {
                 value={masterFX.reverbWet}
                 onChange={(event) => handleReverbChange(parseFloat(event.target.value))}
                 className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                aria-label="Reverb wet dry slider"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm text-slate-400 flex items-center justify-between gap-3">
+                <span>Reverb Decay</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0.2"
+                    max="12"
+                    step="0.1"
+                    value={Number(masterFX.reverbDecay.toFixed(1))}
+                    onChange={(event) => {
+                      const parsedValue = parseFloat(event.target.value);
+                      if (!Number.isNaN(parsedValue)) {
+                        handleReverbDecayChange(clampNumber(parsedValue, 0.2, 12));
+                      }
+                    }}
+                    className={numberInputClass}
+                    aria-label="Reverb decay in seconds"
+                  />
+                  <span>s</span>
+                </div>
+              </label>
+              <input
+                type="range"
+                min="0.2"
+                max="12"
+                step="0.1"
+                value={masterFX.reverbDecay}
+                onChange={(event) => handleReverbDecayChange(parseFloat(event.target.value))}
+                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                aria-label="Reverb decay slider"
               />
             </div>
 
@@ -640,13 +870,13 @@ export default function Home() {
                   <input
                     type="number"
                     min="0"
-                    max="2"
+                    max="20"
                     step="0.01"
                     value={Number(masterFX.autoPannerRate.toFixed(2))}
                     onChange={(event) => {
                       const parsedValue = parseFloat(event.target.value);
                       if (!Number.isNaN(parsedValue)) {
-                        handleAutoPannerRateChange(clampNumber(parsedValue, 0, 2));
+                        handleAutoPannerRateChange(clampNumber(parsedValue, 0, 20));
                       }
                     }}
                     className={numberInputClass}
@@ -658,11 +888,12 @@ export default function Home() {
               <input
                 type="range"
                 min="0"
-                max="2"
+                max="20"
                 step="0.01"
                 value={masterFX.autoPannerRate}
                 onChange={(event) => handleAutoPannerRateChange(parseFloat(event.target.value))}
                 className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                aria-label="Auto-panner speed slider"
               />
             </div>
 
@@ -693,6 +924,7 @@ export default function Home() {
                 value={masterFX.autoPannerDepth}
                 onChange={(event) => handleAutoPannerDepthChange(parseFloat(event.target.value))}
                 className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                aria-label="Auto-panner depth slider"
               />
             </div>
           </div>
@@ -718,16 +950,41 @@ export default function Home() {
               </button>
             </div>
           ) : (
-            <div className="flex flex-wrap gap-3">
-              {BINAURAL_PRESETS.map((preset) => (
-                <button
-                  key={preset.name}
-                  onClick={() => activateBinaural(400, preset.freq)}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm font-medium transition-colors border border-slate-600 hover:border-slate-500"
-                >
-                  {preset.name} ({preset.freq}Hz)
-                </button>
-              ))}
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="text-sm text-slate-400 flex items-center gap-2">
+                  <span>Base Frequency</span>
+                  <input
+                    type="number"
+                    min="20"
+                    max="19960"
+                    step="0.01"
+                    value={Number(binauralBaseFrequency.toFixed(2))}
+                    onChange={(event) => {
+                      const parsedValue = parseFloat(event.target.value);
+                      if (!Number.isNaN(parsedValue)) {
+                        setBinauralBaseFrequency(clampNumber(parsedValue, 20, 19960));
+                      }
+                    }}
+                    className={numberInputClass}
+                    aria-label="Binaural base frequency in hertz"
+                  />
+                  <span>Hz</span>
+                </label>
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                {BINAURAL_PRESETS.map((preset) => (
+                  <button
+                    key={preset.name}
+                    onClick={() => activateBinaural(binauralBaseFrequency, preset.freq)}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm font-medium transition-colors border border-slate-600 hover:border-slate-500"
+                    aria-label={`Activate ${preset.name} binaural preset at ${preset.freq} hertz`}
+                  >
+                    {preset.name} ({preset.freq}Hz)
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </section>
@@ -772,6 +1029,7 @@ export default function Home() {
               <button
                 onClick={handleSavePreset}
                 disabled={!presetName.trim()}
+                aria-label="Save current settings as preset"
                 className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-colors"
               >
                 Save Preset
@@ -779,6 +1037,7 @@ export default function Home() {
 
               <button
                 onClick={handleSharePreset}
+                aria-label="Copy share link for current settings"
                 className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg text-sm font-medium transition-colors"
               >
                 Share
@@ -787,7 +1046,10 @@ export default function Home() {
           </div>
 
           {shareMessage && (
-            <p className="mb-6 text-sm text-cyan-300 bg-cyan-950/30 border border-cyan-800/50 rounded-lg px-4 py-2">
+            <p
+              className="mb-6 text-sm text-cyan-300 bg-cyan-950/30 border border-cyan-800/50 rounded-lg px-4 py-2"
+              aria-live="polite"
+            >
               {shareMessage}
             </p>
           )}
@@ -824,6 +1086,7 @@ export default function Home() {
                           setShareMessage(`Loaded preset: ${preset.name}`);
                         }}
                         className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs font-medium transition-colors"
+                        aria-label={`Load preset ${preset.name}`}
                       >
                         Load
                       </button>
@@ -836,6 +1099,7 @@ export default function Home() {
                             setShareMessage(`Deleted preset: ${preset.name}`);
                           }}
                           className="px-3 py-1 bg-red-900/50 hover:bg-red-800/50 text-red-400 rounded text-xs font-medium transition-colors"
+                          aria-label={`Delete preset ${preset.name}`}
                         >
                           Delete
                         </button>
@@ -853,7 +1117,7 @@ export default function Home() {
         </section>
 
         <footer className="text-center text-slate-600 text-xs py-8">
-          <p>Auralis v1.0 • Built with Next.js, Tone.js & Zustand</p>
+          <p>Auralis v{packageJson.version} • Built with Next.js, Tone.js & Zustand</p>
         </footer>
       </div>
     </main>

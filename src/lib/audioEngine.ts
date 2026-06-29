@@ -1,7 +1,9 @@
 import * as Tone from 'tone';
+import { clamp } from '@/utils/math';
 
 export type WaveformType = 'sine' | 'square' | 'sawtooth' | 'triangle';
 export type NoiseType = 'white' | 'pink' | 'brown';
+export type RecordingMode = 'wet' | 'dry';
 
 export interface OscillatorConfig {
   index: number;
@@ -14,10 +16,10 @@ export interface OscillatorConfig {
   tremoloDepth: number;
 }
 
-const clamp = (value: number, min: number, max: number): number => {
-  if (Number.isNaN(value)) return min;
-  return Math.max(min, Math.min(max, value));
-};
+declare global {
+  // eslint-disable-next-line no-var
+  var __auralisAudioEngine: AudioEngine | undefined;
+}
 
 export class AudioEngine {
   private static instance: AudioEngine | null = null;
@@ -28,14 +30,20 @@ export class AudioEngine {
   private tremoloLFOs: Tone.LFO[] = [];
   private tremoloGains: Tone.Gain[] = [];
   private oscillatorGainValues: number[] = [];
+  private tremoloDepthValues: number[] = [];
   private tremoloEnabledStates: boolean[] = [];
 
   private masterGain: Tone.Gain;
-  private masterVolume: Tone.Volume;
+  private userVolume: Tone.Gain;
+  private transportFade: Tone.Volume;
   private reverb: Tone.Reverb;
   private autoPanner: Tone.AutoPanner;
+  private limiter: Tone.Limiter;
   private analyser: Tone.Analyser;
-  private recorder: Tone.Recorder;
+  private wetRecorder: Tone.Recorder;
+  private dryRecorder: Tone.Recorder;
+  private activeRecorder: Tone.Recorder | null = null;
+  private activeRecordingMode: RecordingMode = 'wet';
 
   private noise: Tone.Noise;
   private noiseGain: Tone.Gain;
@@ -46,25 +54,31 @@ export class AudioEngine {
   private isStarted = false;
   private oscillatorSourcesStarted = false;
   private isRecording = false;
+  private fadeToken = 0;
 
   private constructor() {
     this.masterGain = new Tone.Gain(0.8);
-    this.masterVolume = new Tone.Volume(-Infinity);
+    this.userVolume = new Tone.Gain(0.6);
+    this.transportFade = new Tone.Volume(-Infinity);
     this.reverb = new Tone.Reverb({ decay: 6, wet: 0.3 });
     this.autoPanner = new Tone.AutoPanner({ frequency: 0.2, depth: 0.5 });
+    this.limiter = new Tone.Limiter(-1);
     this.analyser = new Tone.Analyser('waveform', 2048);
-    this.recorder = new Tone.Recorder();
+    this.wetRecorder = new Tone.Recorder();
+    this.dryRecorder = new Tone.Recorder();
 
     this.noise = new Tone.Noise(this.currentNoiseType);
     this.noiseGain = new Tone.Gain(0);
 
-    this.masterGain.connect(this.masterVolume);
-    this.masterVolume.connect(this.reverb);
+    this.masterGain.connect(this.userVolume);
+    this.userVolume.connect(this.transportFade);
+    this.transportFade.connect(this.reverb);
+    this.transportFade.connect(this.dryRecorder);
     this.reverb.connect(this.autoPanner);
-    this.autoPanner.connect(this.analyser);
+    this.autoPanner.connect(this.limiter);
+    this.limiter.connect(this.analyser);
     this.analyser.connect(Tone.Destination);
-
-    this.autoPanner.connect(this.recorder);
+    this.limiter.connect(this.wetRecorder);
 
     this.noise.connect(this.noiseGain);
     this.noiseGain.connect(this.masterGain);
@@ -75,8 +89,17 @@ export class AudioEngine {
   }
 
   public static getInstance(): AudioEngine {
+    if (process.env.NODE_ENV !== 'production' && globalThis.__auralisAudioEngine) {
+      AudioEngine.instance = globalThis.__auralisAudioEngine;
+      return globalThis.__auralisAudioEngine;
+    }
+
     if (!AudioEngine.instance) {
       AudioEngine.instance = new AudioEngine();
+
+      if (process.env.NODE_ENV !== 'production') {
+        globalThis.__auralisAudioEngine = AudioEngine.instance;
+      }
     }
 
     return AudioEngine.instance;
@@ -89,25 +112,23 @@ export class AudioEngine {
       volume: 0,
     });
 
-    const gain = new Tone.Gain(0.5);
     const panner = new Tone.Panner(0);
-
-    const lfo = new Tone.LFO({ frequency: 2, min: 0, max: 1 });
-    const tremoloGain = new Tone.Gain(0.3);
-
-    lfo.connect(tremoloGain);
-    tremoloGain.connect(gain.gain);
+    const gain = new Tone.Gain(0.5);
+    const tremoloGain = new Tone.Gain(1);
+    const lfo = new Tone.LFO({ frequency: 2, min: 0.7, max: 1 });
 
     oscillator.connect(panner);
     panner.connect(gain);
-    gain.connect(this.masterGain);
+    gain.connect(tremoloGain);
+    tremoloGain.connect(this.masterGain);
 
     this.oscillators[index] = oscillator;
-    this.oscillatorGains[index] = gain;
     this.oscillatorPanners[index] = panner;
-    this.tremoloLFOs[index] = lfo;
+    this.oscillatorGains[index] = gain;
     this.tremoloGains[index] = tremoloGain;
+    this.tremoloLFOs[index] = lfo;
     this.oscillatorGainValues[index] = 0.5;
+    this.tremoloDepthValues[index] = 0.3;
     this.tremoloEnabledStates[index] = false;
   }
 
@@ -121,16 +142,18 @@ export class AudioEngine {
       this.oscillatorSourcesStarted = true;
     }
 
-    this.masterVolume.volume.cancelScheduledValues(Tone.now());
-    this.masterVolume.volume.rampTo(0, 0.05);
+    this.fadeToken += 1;
+    this.transportFade.volume.cancelScheduledValues(Tone.now());
+    this.transportFade.volume.rampTo(0, 0.05);
     this.isStarted = true;
   }
 
   public stop(): void {
     if (!this.isStarted) return;
 
-    this.masterVolume.volume.cancelScheduledValues(Tone.now());
-    this.masterVolume.volume.rampTo(-Infinity, 0.25);
+    this.fadeToken += 1;
+    this.transportFade.volume.cancelScheduledValues(Tone.now());
+    this.transportFade.volume.rampTo(-Infinity, 0.25);
     this.stopNoise();
     this.isStarted = false;
   }
@@ -138,32 +161,43 @@ export class AudioEngine {
   public async fadeOutAndStop(duration: number = 10): Promise<void> {
     if (!this.isStarted) return;
 
-    this.masterVolume.volume.cancelScheduledValues(Tone.now());
-    this.masterVolume.volume.rampTo(-Infinity, duration);
+    const token = this.fadeToken + 1;
+    this.fadeToken = token;
+    this.transportFade.volume.cancelScheduledValues(Tone.now());
+    this.transportFade.volume.rampTo(-Infinity, duration);
     this.stopNoise();
 
     await new Promise((resolve) => {
       window.setTimeout(resolve, duration * 1000);
     });
 
-    this.isStarted = false;
+    if (this.fadeToken === token) {
+      this.isStarted = false;
+    }
   }
 
-  public async startRecording(): Promise<void> {
+  public async startRecording(mode: RecordingMode = 'wet'): Promise<void> {
     if (this.isRecording) return;
 
-    this.recorder.start();
+    this.activeRecordingMode = mode;
+    this.activeRecorder = mode === 'dry' ? this.dryRecorder : this.wetRecorder;
+    this.activeRecorder.start();
     this.isRecording = true;
   }
 
   public async stopRecording(): Promise<Blob> {
-    if (!this.isRecording) {
+    if (!this.isRecording || !this.activeRecorder) {
       throw new Error('Not recording');
     }
 
-    const recording = await this.recorder.stop();
+    const recording = await this.activeRecorder.stop();
+    this.activeRecorder = null;
     this.isRecording = false;
     return recording;
+  }
+
+  public getRecordingMode(): RecordingMode {
+    return this.activeRecordingMode;
   }
 
   public isCurrentlyRecording(): boolean {
@@ -171,8 +205,7 @@ export class AudioEngine {
   }
 
   public setMasterVolume(volume: number): void {
-    const safeVolume = clamp(volume, 0, 1);
-    this.masterVolume.volume.rampTo(Tone.gainToDb(safeVolume), 0.05);
+    this.userVolume.gain.rampTo(clamp(volume, 0, 1), 0.05);
   }
 
   public setFrequency(index: number, freq: number): void {
@@ -188,7 +221,6 @@ export class AudioEngine {
 
     const safeGain = clamp(gain, 0, 1);
     this.oscillatorGainValues[index] = safeGain;
-
     oscillatorGain.gain.rampTo(safeGain, 0.05);
   }
 
@@ -208,20 +240,23 @@ export class AudioEngine {
 
   public setTremoloEnabled(index: number, enabled: boolean): void {
     const lfo = this.tremoloLFOs[index];
-    const oscillatorGain = this.oscillatorGains[index];
+    const tremoloGain = this.tremoloGains[index];
 
-    if (!lfo || !oscillatorGain) return;
+    if (!lfo || !tremoloGain) return;
     if (this.tremoloEnabledStates[index] === enabled) return;
 
     if (enabled) {
+      this.configureTremoloRange(index);
+      lfo.connect(tremoloGain.gain);
       lfo.start();
       this.tremoloEnabledStates[index] = true;
       return;
     }
 
     lfo.stop();
-    oscillatorGain.gain.cancelScheduledValues(Tone.now());
-    oscillatorGain.gain.rampTo(this.oscillatorGainValues[index] ?? 0.5, 0.05);
+    lfo.disconnect();
+    tremoloGain.gain.cancelScheduledValues(Tone.now());
+    tremoloGain.gain.rampTo(1, 0.05);
     this.tremoloEnabledStates[index] = false;
   }
 
@@ -233,14 +268,26 @@ export class AudioEngine {
   }
 
   public setTremoloDepth(index: number, depth: number): void {
-    const tremoloGain = this.tremoloGains[index];
-    if (!tremoloGain) return;
+    this.tremoloDepthValues[index] = clamp(depth, 0, 1);
+    this.configureTremoloRange(index);
+  }
 
-    tremoloGain.gain.rampTo(clamp(depth, 0, 1), 0.05);
+  private configureTremoloRange(index: number): void {
+    const lfo = this.tremoloLFOs[index];
+    if (!lfo) return;
+
+    const depth = this.tremoloDepthValues[index] ?? 0;
+    lfo.min = 1 - depth;
+    lfo.max = 1;
   }
 
   public setReverbWet(wet: number): void {
     this.reverb.wet.rampTo(clamp(wet, 0, 1), 0.05);
+  }
+
+  public setReverbDecay(decay: number): void {
+    this.reverb.decay = clamp(decay, 0.2, 12);
+    this.reverb.generate();
   }
 
   public setAutoPannerRate(rate: number): void {

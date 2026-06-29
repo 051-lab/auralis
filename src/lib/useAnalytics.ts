@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect } from 'react';
-import { usePathname, useSearchParams } from 'next/navigation';
+import { useEffect, useRef } from 'react';
+import { usePathname } from 'next/navigation';
 import { analytics } from './analytics';
 
 /**
@@ -10,14 +10,18 @@ import { analytics } from './analytics';
  */
 export function useAnalytics() {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
+  const didTrackInitialPageView = useRef(false);
 
   useEffect(() => {
-    // Track page view on route change
+    if (!didTrackInitialPageView.current) {
+      didTrackInitialPageView.current = true;
+      return;
+    }
+
     if (pathname) {
       analytics.trackPageView();
     }
-  }, [pathname, searchParams]);
+  }, [pathname]);
 
   return { analytics };
 }

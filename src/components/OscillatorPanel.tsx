@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { formatFrequency, logFrequencyToLinear } from '@/utils/audioMath';
+import { clamp } from '@/utils/math';
 import type { WaveformType } from '@/lib/audioEngine';
 
 interface OscillatorPanelProps {
@@ -28,11 +29,6 @@ const WAVEFORMS: Array<{ value: WaveformType; label: string; title: string }> = 
   { value: 'sawtooth', label: 'Sa', title: 'Sawtooth' },
   { value: 'triangle', label: 'Tr', title: 'Triangle' },
 ];
-
-const clamp = (value: number, min: number, max: number): number => {
-  if (Number.isNaN(value)) return min;
-  return Math.max(min, Math.min(max, value));
-};
 
 const numberInputClass =
   'w-24 rounded-lg border border-slate-700 bg-slate-950/70 px-2 py-1 text-right text-xs text-slate-100 outline-none transition-colors focus:border-cyan-500 disabled:cursor-not-allowed disabled:opacity-50';
@@ -133,6 +129,7 @@ export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
           value={linearFreq}
           onChange={(e) => onFrequencyChange(parseFloat(e.target.value))}
           className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
+          aria-label={`Oscillator ${index + 1} frequency slider`}
         />
       </div>
 
@@ -162,6 +159,7 @@ export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
           value={gain}
           onChange={(e) => onGainChange(parseFloat(e.target.value))}
           className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
+          aria-label={`Oscillator ${index + 1} gain slider`}
         />
       </div>
 
@@ -193,12 +191,14 @@ export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
           value={pan}
           onChange={(e) => onPanChange(parseFloat(e.target.value))}
           className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
+          aria-label={`Oscillator ${index + 1} pan slider`}
         />
       </div>
 
       {/* Tremolo Toggle */}
       <button
         onClick={() => setShowTremolo(!showTremolo)}
+        aria-label={`Toggle oscillator ${index + 1} tremolo controls`}
         className={`w-full py-2 rounded-lg text-xs font-medium transition-all mb-3 ${
           tremoloEnabled
             ? `bg-gradient-to-r ${color.primary} text-white`
@@ -217,14 +217,14 @@ export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
               <div className="flex items-center gap-2">
                 <input
                   type="number"
-                  min="0.5"
-                  max="10"
+                  min="0.1"
+                  max="30"
                   step="0.1"
                   value={Number(tremoloRate.toFixed(1))}
                   onChange={(e) => {
                     const parsedValue = parseFloat(e.target.value);
                     if (!Number.isNaN(parsedValue)) {
-                      onTremoloRateChange(clamp(parsedValue, 0.5, 10));
+                      onTremoloRateChange(clamp(parsedValue, 0.1, 30));
                     }
                   }}
                   className={numberInputClass}
@@ -236,13 +236,14 @@ export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
             </label>
             <input
               type="range"
-              min="0.5"
-              max="10"
+              min="0.1"
+              max="30"
               step="0.1"
               value={tremoloRate}
               onChange={(e) => onTremoloRateChange(parseFloat(e.target.value))}
               className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
               disabled={!tremoloEnabled}
+              aria-label={`Oscillator ${index + 1} tremolo speed slider`}
             />
           </div>
           <div className="space-y-2">
@@ -272,10 +273,12 @@ export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
               onChange={(e) => onTremoloDepthChange(parseFloat(e.target.value))}
               className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
               disabled={!tremoloEnabled}
+              aria-label={`Oscillator ${index + 1} tremolo depth slider`}
             />
           </div>
           <button
             onClick={() => onTremoloToggle(!tremoloEnabled)}
+            aria-label={`${tremoloEnabled ? 'Disable' : 'Enable'} oscillator ${index + 1} tremolo`}
             className={`w-full py-2 rounded-lg text-xs font-medium transition-all ${
               tremoloEnabled
                 ? 'bg-red-900/50 text-red-400 hover:bg-red-800/50'

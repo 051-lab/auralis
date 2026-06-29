@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { NoiseType, WaveformType } from '../lib/audioEngine';
+import { clampUnknown } from '@/utils/math';
 
 export interface OscillatorState {
   frequency: number;
@@ -13,7 +14,9 @@ export interface OscillatorState {
 }
 
 export interface MasterFXState {
+  masterVolume: number;
   reverbWet: number;
+  reverbDecay: number;
   autoPannerRate: number;
   autoPannerDepth: number;
 }
@@ -33,6 +36,7 @@ export interface SharedPresetPayload {
 
 export interface Preset {
   id: string;
+  version: number;
   name: string;
   oscillators: OscillatorState[];
   masterFX: MasterFXState;
@@ -62,7 +66,9 @@ interface AuralisState {
   setOscillatorTremoloEnabled: (index: number, enabled: boolean) => void;
   setOscillatorTremoloRate: (index: number, rate: number) => void;
   setOscillatorTremoloDepth: (index: number, depth: number) => void;
+  setMasterVolume: (volume: number) => void;
   setReverbWet: (wet: number) => void;
+  setReverbDecay: (decay: number) => void;
   setAutoPannerRate: (rate: number) => void;
   setAutoPannerDepth: (depth: number) => void;
   setBinauralMode: (enabled: boolean, presetName?: string | null) => void;
@@ -79,10 +85,11 @@ interface AuralisState {
   resetToDefaults: () => void;
 }
 
-const clamp = (value: unknown, min: number, max: number, fallback: number): number => {
-  if (typeof value !== 'number' || Number.isNaN(value)) return fallback;
-  return Math.max(min, Math.min(max, value));
-};
+export const CURRENT_PRESET_VERSION = 1;
+const MAX_USER_PRESETS = 50;
+const MAX_PRESET_NAME_LENGTH = 80;
+
+const clamp = clampUnknown;
 
 const isWaveformType = (value: unknown): value is WaveformType => {
   return value === 'sine' || value === 'square' || value === 'sawtooth' || value === 'triangle';
@@ -132,7 +139,9 @@ const defaultOscillators: OscillatorState[] = [
 ];
 
 const defaultMasterFX: MasterFXState = {
+  masterVolume: 0.6,
   reverbWet: 0.3,
+  reverbDecay: 6,
   autoPannerRate: 0.2,
   autoPannerDepth: 0.5,
 };
@@ -164,6 +173,7 @@ const createOscillator = (
 const builtInPresets: Preset[] = [
   {
     id: 'built-in-gamma-neural-binding-40hz',
+    version: CURRENT_PRESET_VERSION,
     name: 'Gamma Neural Binding (40Hz)',
     oscillators: [
       createOscillator(200, 0.6, -1),
@@ -172,7 +182,9 @@ const builtInPresets: Preset[] = [
       createOscillator(500, 0, 0),
     ],
     masterFX: {
+      masterVolume: 0.6,
       reverbWet: 0.1,
+      reverbDecay: 6,
       autoPannerRate: 0,
       autoPannerDepth: 0,
     },
@@ -183,6 +195,7 @@ const builtInPresets: Preset[] = [
   },
   {
     id: 'built-in-alpha-relaxed-focus-10hz',
+    version: CURRENT_PRESET_VERSION,
     name: 'Alpha Relaxed Focus (10Hz)',
     oscillators: [
       createOscillator(220, 0.48, -1),
@@ -191,7 +204,9 @@ const builtInPresets: Preset[] = [
       createOscillator(500, 0, 0),
     ],
     masterFX: {
+      masterVolume: 0.55,
       reverbWet: 0.12,
+      reverbDecay: 5,
       autoPannerRate: 0,
       autoPannerDepth: 0,
     },
@@ -202,6 +217,7 @@ const builtInPresets: Preset[] = [
   },
   {
     id: 'built-in-theta-meditation-6hz',
+    version: CURRENT_PRESET_VERSION,
     name: 'Theta Meditation Gate (6Hz)',
     oscillators: [
       createOscillator(180, 0.45, -1),
@@ -210,7 +226,9 @@ const builtInPresets: Preset[] = [
       createOscillator(500, 0, 0),
     ],
     masterFX: {
+      masterVolume: 0.52,
       reverbWet: 0.16,
+      reverbDecay: 7,
       autoPannerRate: 0,
       autoPannerDepth: 0,
     },
@@ -221,6 +239,7 @@ const builtInPresets: Preset[] = [
   },
   {
     id: 'built-in-delta-sleep-descent-2hz',
+    version: CURRENT_PRESET_VERSION,
     name: 'Delta Sleep Descent (2Hz)',
     oscillators: [
       createOscillator(120, 0.38, -1),
@@ -229,7 +248,9 @@ const builtInPresets: Preset[] = [
       createOscillator(500, 0, 0),
     ],
     masterFX: {
+      masterVolume: 0.5,
       reverbWet: 0.18,
+      reverbDecay: 8,
       autoPannerRate: 0,
       autoPannerDepth: 0,
     },
@@ -245,16 +266,24 @@ const mergePresets = (incomingPresets: Preset[] = []): Preset[] => {
   const existingIds = new Set(mergedPresets.map((preset) => preset.id));
 
   incomingPresets.forEach((preset) => {
-    if (!existingIds.has(preset.id)) {
-      mergedPresets.push(preset);
-      existingIds.add(preset.id);
+    const normalizedPreset = normalizePreset(preset);
+
+    if (!existingIds.has(normalizedPreset.id)) {
+      mergedPresets.push(normalizedPreset);
+      existingIds.add(normalizedPreset.id);
     }
   });
 
-  return mergedPresets;
+  const builtIns = mergedPresets.filter((preset) => preset.id.startsWith('built-in-'));
+  const userPresets = mergedPresets
+    .filter((preset) => !preset.id.startsWith('built-in-'))
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, MAX_USER_PRESETS);
+
+  return [...builtIns, ...userPresets];
 };
 
-const normalizeOscillators = (
+export const normalizeOscillators = (
   incomingOscillators?: Partial<OscillatorState>[]
 ): OscillatorState[] => {
   return defaultOscillators.map((defaultOscillator, index) => {
@@ -275,9 +304,11 @@ const normalizeOscillators = (
   });
 };
 
-const normalizeMasterFX = (incomingMasterFX?: Partial<MasterFXState>): MasterFXState => {
+export const normalizeMasterFX = (incomingMasterFX?: Partial<MasterFXState>): MasterFXState => {
   return {
+    masterVolume: clamp(incomingMasterFX?.masterVolume, 0, 1, defaultMasterFX.masterVolume),
     reverbWet: clamp(incomingMasterFX?.reverbWet, 0, 1, defaultMasterFX.reverbWet),
+    reverbDecay: clamp(incomingMasterFX?.reverbDecay, 0.2, 12, defaultMasterFX.reverbDecay),
     autoPannerRate: clamp(
       incomingMasterFX?.autoPannerRate,
       0,
@@ -291,6 +322,38 @@ const normalizeMasterFX = (incomingMasterFX?: Partial<MasterFXState>): MasterFXS
       defaultMasterFX.autoPannerDepth
     ),
   };
+};
+
+const normalizePresetName = (name: unknown): string => {
+  const fallback = 'Untitled Preset';
+  if (typeof name !== 'string') return fallback;
+
+  const trimmedName = name.trim();
+  if (!trimmedName) return fallback;
+
+  return trimmedName.slice(0, MAX_PRESET_NAME_LENGTH);
+};
+
+const normalizePreset = (preset: Partial<Preset>): Preset => {
+  return {
+    id: typeof preset.id === 'string' && preset.id ? preset.id : `preset-${Date.now()}`,
+    version: CURRENT_PRESET_VERSION,
+    name: normalizePresetName(preset.name),
+    oscillators: normalizeOscillators(preset.oscillators),
+    masterFX: normalizeMasterFX(preset.masterFX),
+    noiseEnabled:
+      typeof preset.noiseEnabled === 'boolean' ? preset.noiseEnabled : defaultNoiseEnabled,
+    noiseType: isNoiseType(preset.noiseType) ? preset.noiseType : defaultNoiseType,
+    noiseGain: clamp(preset.noiseGain, 0, 1, defaultNoiseGain),
+    createdAt: clamp(preset.createdAt, 0, Number.MAX_SAFE_INTEGER, Date.now()),
+  };
+};
+
+const normalizeUserPresets = (presets: Preset[]): Preset[] => {
+  return presets
+    .filter((preset) => !preset.id.startsWith('built-in-'))
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, MAX_USER_PRESETS);
 };
 
 export const useAuralisStore = create<AuralisState>()(
@@ -399,11 +462,27 @@ export const useAuralisStore = create<AuralisState>()(
           return { oscillators: newOscillators };
         }),
 
+      setMasterVolume: (volume) =>
+        set((state) => ({
+          masterFX: {
+            ...state.masterFX,
+            masterVolume: clamp(volume, 0, 1, state.masterFX.masterVolume),
+          },
+        })),
+
       setReverbWet: (wet) =>
         set((state) => ({
           masterFX: {
             ...state.masterFX,
             reverbWet: clamp(wet, 0, 1, state.masterFX.reverbWet),
+          },
+        })),
+
+      setReverbDecay: (decay) =>
+        set((state) => ({
+          masterFX: {
+            ...state.masterFX,
+            reverbDecay: clamp(decay, 0.2, 12, state.masterFX.reverbDecay),
           },
         })),
 
@@ -449,7 +528,8 @@ export const useAuralisStore = create<AuralisState>()(
 
         const newPreset: Preset = {
           id: `preset-${Date.now()}`,
-          name,
+          version: CURRENT_PRESET_VERSION,
+          name: normalizePresetName(name),
           oscillators: cloneOscillators(state.oscillators),
           masterFX: { ...state.masterFX },
           noiseEnabled: state.noiseEnabled,
@@ -459,7 +539,11 @@ export const useAuralisStore = create<AuralisState>()(
         };
 
         set((currentState) => ({
-          presets: [...currentState.presets, newPreset],
+          presets: [
+            ...builtInPresets,
+            newPreset,
+            ...normalizeUserPresets(currentState.presets),
+          ].slice(0, builtInPresets.length + MAX_USER_PRESETS),
         }));
       },
 
@@ -482,7 +566,9 @@ export const useAuralisStore = create<AuralisState>()(
 
       deletePreset: (id) =>
         set((state) => ({
-          presets: state.presets.filter((preset) => preset.id !== id),
+          presets: id.startsWith('built-in-')
+            ? state.presets
+            : state.presets.filter((preset) => preset.id !== id),
         })),
 
       applySharedPreset: (payload) => {
