@@ -10,7 +10,6 @@ interface VisualizerProps {
 export const Visualizer: React.FC<VisualizerProps> = ({ isActive }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>();
-  const engineRef = useRef(getAudioEngine());
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -19,7 +18,7 @@ export const Visualizer: React.FC<VisualizerProps> = ({ isActive }) => {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const analyser = engineRef.current.getAnalyser();
+    const analyser = getAudioEngine().getAnalyser();
     let hue = 0;
 
     const draw = () => {

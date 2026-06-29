@@ -22,8 +22,6 @@ const clamp = (value: number, min: number, max: number): number => {
 export class AudioEngine {
   private static instance: AudioEngine | null = null;
 
-  private context: Tone.Context | null = null;
-
   private oscillators: Tone.Oscillator[] = [];
   private oscillatorGains: Tone.Gain[] = [];
   private oscillatorPanners: Tone.Panner[] = [];
@@ -115,8 +113,6 @@ export class AudioEngine {
 
   public async start(): Promise<void> {
     await Tone.start();
-
-    this.context = Tone.getContext();
 
     if (!this.oscillatorSourcesStarted) {
       this.oscillators.forEach((oscillator) => {

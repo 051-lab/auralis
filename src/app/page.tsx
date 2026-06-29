@@ -11,6 +11,11 @@ import { Timer } from '@/components/Timer';
 import { linearToLogFrequency } from '@/utils/audioMath';
 import { analytics } from '@/lib/analytics';
 
+type AudioEngineInstance = ReturnType<typeof getAudioEngine>;
+
+const numberInputClass =
+  'w-24 rounded-lg border border-slate-700 bg-slate-950/70 px-2 py-1 text-right text-xs text-slate-100 outline-none transition-colors focus:border-cyan-500';
+
 const BINAURAL_PRESETS = [
   { name: 'Delta Sleep', freq: 2 },
   { name: 'Theta Meditation', freq: 6 },
@@ -47,8 +52,17 @@ function decodeBase64Unicode(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
+function clampNumber(value: number, min: number, max: number): number {
+  if (Number.isNaN(value)) return min;
+  return Math.max(min, Math.min(max, value));
+}
+
+function percentInputValue(value: number): number {
+  return Number((value * 100).toFixed(0));
+}
+
 export default function Home() {
-  const [engine] = useState(() => getAudioEngine());
+  const [engine, setEngine] = useState<AudioEngineInstance | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [presetName, setPresetName] = useState('');
   const [isRecording, setIsRecording] = useState(false);
@@ -90,6 +104,20 @@ export default function Home() {
   } = useAuralisStore();
 
   useEffect(() => {
+    setEngine(getAudioEngine());
+  }, []);
+
+  const ensureEngine = (): AudioEngineInstance => {
+    const activeEngine = engine ?? getAudioEngine();
+
+    if (!engine) {
+      setEngine(activeEngine);
+    }
+
+    return activeEngine;
+  };
+
+  useEffect(() => {
     analytics.trackPageView();
 
     const urlParams = new URLSearchParams(window.location.search);
@@ -111,6 +139,8 @@ export default function Home() {
   }, [applySharedPreset]);
 
   useEffect(() => {
+    if (!engine) return;
+
     oscillators.forEach((oscillator, index) => {
       engine.setFrequency(index, oscillator.frequency);
       engine.setGain(index, oscillator.gain);
@@ -164,10 +194,12 @@ export default function Home() {
   }, [isPlaying]);
 
   const handleStart = async () => {
-    await engine.start();
+    const activeEngine = ensureEngine();
+
+    await activeEngine.start();
 
     if (noiseEnabled && noiseGain > 0) {
-      engine.startNoise();
+      activeEngine.startNoise();
     }
 
     setIsPlaying(true);
@@ -175,7 +207,9 @@ export default function Home() {
   };
 
   const handleStop = async () => {
-    await engine.fadeOutAndStop(2);
+    const activeEngine = ensureEngine();
+
+    await activeEngine.fadeOutAndStop(2);
 
     setIsPlaying(false);
     analytics.trackAudioStop('manual');
@@ -228,12 +262,14 @@ export default function Home() {
   };
 
   const handleNoiseToggle = (enabled: boolean) => {
+    const activeEngine = ensureEngine();
+
     setNoiseEnabled(enabled);
 
     if (enabled && isPlaying && noiseGain > 0) {
-      engine.startNoise();
+      activeEngine.startNoise();
     } else {
-      engine.stopNoise();
+      activeEngine.stopNoise();
     }
   };
 
@@ -243,6 +279,16 @@ export default function Home() {
 
   const handleNoiseGainChange = (gain: number) => {
     setNoiseGain(gain);
+  };
+
+  const handlePercentInputChange = (
+    value: string,
+    onChange: (nextValue: number) => void
+  ) => {
+    const parsedValue = parseFloat(value);
+    if (Number.isNaN(parsedValue)) return;
+
+    onChange(clampNumber(parsedValue, 0, 100) / 100);
   };
 
   const activateBinaural = (baseFreq: number, beatFreq: number) => {
@@ -316,7 +362,9 @@ export default function Home() {
   const handleStartRecording = async () => {
     if (!isPlaying) return;
 
-    await engine.startRecording();
+    const activeEngine = ensureEngine();
+
+    await activeEngine.startRecording();
     setIsRecording(true);
     setStoreIsRecording(true);
   };
@@ -325,7 +373,8 @@ export default function Home() {
     if (!isRecording) return;
 
     try {
-      const blob = await engine.stopRecording();
+      const activeEngine = ensureEngine();
+      const blob = await activeEngine.stopRecording();
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
 
@@ -472,9 +521,23 @@ export default function Home() {
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm text-slate-400 flex justify-between">
+              <label className="text-sm text-slate-400 flex items-center justify-between gap-3">
                 <span>Noise Volume</span>
-                <span>{Math.round(noiseGain * 100)}%</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={percentInputValue(noiseGain)}
+                    onChange={(event) =>
+                      handlePercentInputChange(event.target.value, handleNoiseGainChange)
+                    }
+                    className={numberInputClass}
+                    aria-label="Noise volume percent"
+                  />
+                  <span>%</span>
+                </div>
               </label>
               <input
                 type="range"
@@ -494,9 +557,23 @@ export default function Home() {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="space-y-2">
-              <label className="text-sm text-slate-400 flex justify-between">
+              <label className="text-sm text-slate-400 flex items-center justify-between gap-3">
                 <span>Reverb Wet/Dry</span>
-                <span>{Math.round(masterFX.reverbWet * 100)}%</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={percentInputValue(masterFX.reverbWet)}
+                    onChange={(event) =>
+                      handlePercentInputChange(event.target.value, handleReverbChange)
+                    }
+                    className={numberInputClass}
+                    aria-label="Reverb wet dry percent"
+                  />
+                  <span>%</span>
+                </div>
               </label>
               <input
                 type="range"
@@ -510,9 +587,26 @@ export default function Home() {
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm text-slate-400 flex justify-between">
+              <label className="text-sm text-slate-400 flex items-center justify-between gap-3">
                 <span>Auto-Panner Speed</span>
-                <span>{masterFX.autoPannerRate.toFixed(2)} Hz</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0.1"
+                    max="2"
+                    step="0.01"
+                    value={Number(masterFX.autoPannerRate.toFixed(2))}
+                    onChange={(event) => {
+                      const parsedValue = parseFloat(event.target.value);
+                      if (!Number.isNaN(parsedValue)) {
+                        handleAutoPannerRateChange(clampNumber(parsedValue, 0.1, 2));
+                      }
+                    }}
+                    className={numberInputClass}
+                    aria-label="Auto-panner speed in hertz"
+                  />
+                  <span>Hz</span>
+                </div>
               </label>
               <input
                 type="range"
@@ -526,9 +620,23 @@ export default function Home() {
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm text-slate-400 flex justify-between">
+              <label className="text-sm text-slate-400 flex items-center justify-between gap-3">
                 <span>Auto-Panner Depth</span>
-                <span>{Math.round(masterFX.autoPannerDepth * 100)}%</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={percentInputValue(masterFX.autoPannerDepth)}
+                    onChange={(event) =>
+                      handlePercentInputChange(event.target.value, handleAutoPannerDepthChange)
+                    }
+                    className={numberInputClass}
+                    aria-label="Auto-panner depth percent"
+                  />
+                  <span>%</span>
+                </div>
               </label>
               <input
                 type="range"

@@ -4,6 +4,8 @@ import React, { useEffect, useRef } from 'react';
 import { getAudioEngine } from '@/lib/audioEngine';
 import { analytics } from '@/lib/analytics';
 
+type AudioEngineInstance = ReturnType<typeof getAudioEngine>;
+
 interface TimerProps {
   duration: number | null;
   remaining: number | null;
@@ -28,7 +30,11 @@ export const Timer: React.FC<TimerProps> = ({
   onStop,
 }) => {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const engineRef = useRef(getAudioEngine());
+  const engineRef = useRef<AudioEngineInstance | null>(null);
+
+  useEffect(() => {
+    engineRef.current = getAudioEngine();
+  }, []);
 
   useEffect(() => {
     if (timerRef.current) {
@@ -64,7 +70,9 @@ export const Timer: React.FC<TimerProps> = ({
     }
     
     // Auto-fade over 10 seconds
-    await engineRef.current.fadeOutAndStop(10);
+    const engine = engineRef.current ?? getAudioEngine();
+
+    await engine.fadeOutAndStop(10);
     onSetRemaining(null);
     onSetDuration(null);
     analytics.trackAudioStop('timer_complete');
