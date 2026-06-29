@@ -521,15 +521,19 @@ export default function Home() {
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm text-slate-400 flex items-center justify-between gap-3">
-                <span>Noise Volume</span>
+              <div className="text-sm text-slate-400 flex items-center justify-between gap-3">
+                <label htmlFor="noise-volume-input">Noise Volume</label>
                 <div className="flex items-center gap-2">
                   <input
+                    id="noise-volume-input"
                     type="number"
                     min="0"
                     max="100"
                     step="1"
                     value={percentInputValue(noiseGain)}
+                    onInput={(event) =>
+                      handlePercentInputChange(event.currentTarget.value, handleNoiseGainChange)
+                    }
                     onChange={(event) =>
                       handlePercentInputChange(event.target.value, handleNoiseGainChange)
                     }
@@ -538,7 +542,7 @@ export default function Home() {
                   />
                   <span>%</span>
                 </div>
-              </label>
+              </div>
               <input
                 type="range"
                 min="0"
@@ -547,6 +551,7 @@ export default function Home() {
                 value={noiseGain}
                 onChange={(event) => handleNoiseGainChange(parseFloat(event.target.value))}
                 className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                aria-label="Noise volume slider"
               />
             </div>
           </div>
