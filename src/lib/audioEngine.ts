@@ -244,7 +244,7 @@ export class AudioEngine {
   }
 
   public setAutoPannerRate(rate: number): void {
-    this.autoPanner.frequency.rampTo(clamp(rate, 0.01, 20), 0.05);
+    this.autoPanner.frequency.rampTo(clamp(rate, 0, 20), 0.05);
   }
 
   public setAutoPannerDepth(depth: number): void {

@@ -140,9 +140,118 @@ const defaultMasterFX: MasterFXState = {
 const defaultNoiseEnabled = false;
 const defaultNoiseType: NoiseType = 'brown';
 const defaultNoiseGain = 0.2;
+const builtInPresetCreatedAt = Date.UTC(2026, 5, 29, 12);
 
 const cloneOscillators = (oscillators: OscillatorState[]): OscillatorState[] => {
   return oscillators.map((oscillator) => ({ ...oscillator }));
+};
+
+const createOscillator = (
+  frequency: number,
+  gain: number,
+  pan: number,
+  waveform: WaveformType = 'sine'
+): OscillatorState => ({
+  frequency,
+  gain,
+  waveform,
+  pan,
+  tremoloEnabled: false,
+  tremoloRate: 2,
+  tremoloDepth: 0.3,
+});
+
+const builtInPresets: Preset[] = [
+  {
+    id: 'built-in-gamma-neural-binding-40hz',
+    name: 'Gamma Neural Binding (40Hz)',
+    oscillators: [
+      createOscillator(200, 0.6, -1),
+      createOscillator(240, 0.6, 1),
+      createOscillator(400, 0, 0),
+      createOscillator(500, 0, 0),
+    ],
+    masterFX: {
+      reverbWet: 0.1,
+      autoPannerRate: 0,
+      autoPannerDepth: 0,
+    },
+    noiseEnabled: true,
+    noiseType: 'brown',
+    noiseGain: 0.1,
+    createdAt: builtInPresetCreatedAt,
+  },
+  {
+    id: 'built-in-alpha-relaxed-focus-10hz',
+    name: 'Alpha Relaxed Focus (10Hz)',
+    oscillators: [
+      createOscillator(220, 0.48, -1),
+      createOscillator(230, 0.48, 1),
+      createOscillator(440, 0.08, 0, 'triangle'),
+      createOscillator(500, 0, 0),
+    ],
+    masterFX: {
+      reverbWet: 0.12,
+      autoPannerRate: 0,
+      autoPannerDepth: 0,
+    },
+    noiseEnabled: true,
+    noiseType: 'brown',
+    noiseGain: 0.08,
+    createdAt: builtInPresetCreatedAt,
+  },
+  {
+    id: 'built-in-theta-meditation-6hz',
+    name: 'Theta Meditation Gate (6Hz)',
+    oscillators: [
+      createOscillator(180, 0.45, -1),
+      createOscillator(186, 0.45, 1),
+      createOscillator(360, 0.06, 0),
+      createOscillator(500, 0, 0),
+    ],
+    masterFX: {
+      reverbWet: 0.16,
+      autoPannerRate: 0,
+      autoPannerDepth: 0,
+    },
+    noiseEnabled: true,
+    noiseType: 'pink',
+    noiseGain: 0.12,
+    createdAt: builtInPresetCreatedAt,
+  },
+  {
+    id: 'built-in-delta-sleep-descent-2hz',
+    name: 'Delta Sleep Descent (2Hz)',
+    oscillators: [
+      createOscillator(120, 0.38, -1),
+      createOscillator(122, 0.38, 1),
+      createOscillator(240, 0.05, 0),
+      createOscillator(500, 0, 0),
+    ],
+    masterFX: {
+      reverbWet: 0.18,
+      autoPannerRate: 0,
+      autoPannerDepth: 0,
+    },
+    noiseEnabled: true,
+    noiseType: 'brown',
+    noiseGain: 0.15,
+    createdAt: builtInPresetCreatedAt,
+  },
+];
+
+const mergePresets = (incomingPresets: Preset[] = []): Preset[] => {
+  const mergedPresets = [...builtInPresets];
+  const existingIds = new Set(mergedPresets.map((preset) => preset.id));
+
+  incomingPresets.forEach((preset) => {
+    if (!existingIds.has(preset.id)) {
+      mergedPresets.push(preset);
+      existingIds.add(preset.id);
+    }
+  });
+
+  return mergedPresets;
 };
 
 const normalizeOscillators = (
@@ -171,7 +280,7 @@ const normalizeMasterFX = (incomingMasterFX?: Partial<MasterFXState>): MasterFXS
     reverbWet: clamp(incomingMasterFX?.reverbWet, 0, 1, defaultMasterFX.reverbWet),
     autoPannerRate: clamp(
       incomingMasterFX?.autoPannerRate,
-      0.01,
+      0,
       20,
       defaultMasterFX.autoPannerRate
     ),
@@ -191,7 +300,7 @@ export const useAuralisStore = create<AuralisState>()(
       masterFX: { ...defaultMasterFX },
       isBinauralMode: false,
       binauralPreset: null,
-      presets: [],
+      presets: mergePresets(),
       timerDuration: null,
       timerRemaining: null,
       isRecording: false,
@@ -302,7 +411,7 @@ export const useAuralisStore = create<AuralisState>()(
         set((state) => ({
           masterFX: {
             ...state.masterFX,
-            autoPannerRate: clamp(rate, 0.01, 20, state.masterFX.autoPannerRate),
+            autoPannerRate: clamp(rate, 0, 20, state.masterFX.autoPannerRate),
           },
         })),
 
@@ -405,6 +514,7 @@ export const useAuralisStore = create<AuralisState>()(
           noiseEnabled: defaultNoiseEnabled,
           noiseType: defaultNoiseType,
           noiseGain: defaultNoiseGain,
+          presets: mergePresets(get().presets),
         }),
     }),
     {
@@ -412,6 +522,15 @@ export const useAuralisStore = create<AuralisState>()(
       partialize: (state) => ({
         presets: state.presets,
       }),
+      merge: (persistedState, currentState) => {
+        const persisted = persistedState as Partial<AuralisState> | undefined;
+
+        return {
+          ...currentState,
+          ...persisted,
+          presets: mergePresets(persisted?.presets),
+        };
+      },
     }
   )
 );

@@ -639,14 +639,14 @@ export default function Home() {
                 <div className="flex items-center gap-2">
                   <input
                     type="number"
-                    min="0.1"
+                    min="0"
                     max="2"
                     step="0.01"
                     value={Number(masterFX.autoPannerRate.toFixed(2))}
                     onChange={(event) => {
                       const parsedValue = parseFloat(event.target.value);
                       if (!Number.isNaN(parsedValue)) {
-                        handleAutoPannerRateChange(clampNumber(parsedValue, 0.1, 2));
+                        handleAutoPannerRateChange(clampNumber(parsedValue, 0, 2));
                       }
                     }}
                     className={numberInputClass}
@@ -657,7 +657,7 @@ export default function Home() {
               </label>
               <input
                 type="range"
-                min="0.1"
+                min="0"
                 max="2"
                 step="0.01"
                 value={masterFX.autoPannerRate}
@@ -794,43 +794,56 @@ export default function Home() {
 
           {presets.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {presets.map((preset) => (
-                <div
-                  key={preset.id}
-                  className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700 hover:border-slate-600 transition-colors"
-                >
-                  <div>
-                    <p className="font-medium text-slate-200">{preset.name}</p>
-                    <p className="text-xs text-slate-500">
-                      {new Date(preset.createdAt).toLocaleDateString()}
-                    </p>
-                  </div>
+              {presets.map((preset) => {
+                const isBuiltInPreset = preset.id.startsWith('built-in-');
 
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => {
-                        loadPreset(preset.id);
-                        analytics.trackPresetLoad(preset.name, 'local');
-                        setShareMessage(`Loaded preset: ${preset.name}`);
-                      }}
-                      className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs font-medium transition-colors"
-                    >
-                      Load
-                    </button>
+                return (
+                  <div
+                    key={preset.id}
+                    className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700 hover:border-slate-600 transition-colors"
+                  >
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-medium text-slate-200">{preset.name}</p>
+                        {isBuiltInPreset && (
+                          <span className="px-2 py-0.5 rounded-full bg-cyan-950/50 border border-cyan-800/50 text-[10px] uppercase tracking-wide text-cyan-300">
+                            Built-in
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-500">
+                        {new Date(preset.createdAt).toLocaleDateString()}
+                      </p>
+                    </div>
 
-                    <button
-                      onClick={() => {
-                        deletePreset(preset.id);
-                        analytics.trackPresetDelete(preset.name);
-                        setShareMessage(`Deleted preset: ${preset.name}`);
-                      }}
-                      className="px-3 py-1 bg-red-900/50 hover:bg-red-800/50 text-red-400 rounded text-xs font-medium transition-colors"
-                    >
-                      Delete
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          loadPreset(preset.id);
+                          analytics.trackPresetLoad(preset.name, 'local');
+                          setShareMessage(`Loaded preset: ${preset.name}`);
+                        }}
+                        className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs font-medium transition-colors"
+                      >
+                        Load
+                      </button>
+
+                      {!isBuiltInPreset && (
+                        <button
+                          onClick={() => {
+                            deletePreset(preset.id);
+                            analytics.trackPresetDelete(preset.name);
+                            setShareMessage(`Deleted preset: ${preset.name}`);
+                          }}
+                          className="px-3 py-1 bg-red-900/50 hover:bg-red-800/50 text-red-400 rounded text-xs font-medium transition-colors"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <p className="text-slate-500 text-sm">
