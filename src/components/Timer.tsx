@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { getAudioEngine } from '@/lib/audioEngine';
 import { analytics } from '@/lib/analytics';
 
@@ -36,6 +36,25 @@ export const Timer: React.FC<TimerProps> = ({
     engineRef.current = getAudioEngine();
   }, []);
 
+  const handleTimerComplete = useCallback(async () => {
+    if (duration) {
+      analytics.trackTimerComplete(duration);
+    }
+
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    const engine = engineRef.current ?? getAudioEngine();
+
+    await engine.fadeOutAndStop(10);
+    onSetRemaining(null);
+    onSetDuration(null);
+    analytics.trackAudioStop('timer_complete');
+    onStop();
+  }, [duration, onSetDuration, onSetRemaining, onStop]);
+
   useEffect(() => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
@@ -56,28 +75,7 @@ export const Timer: React.FC<TimerProps> = ({
         clearInterval(timerRef.current);
       }
     };
-  }, [duration, remaining, isPlaying]);
-
-  const handleTimerComplete = async () => {
-    // Track timer completion
-    if (duration) {
-      analytics.trackTimerComplete(duration);
-    }
-
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-    
-    // Auto-fade over 10 seconds
-    const engine = engineRef.current ?? getAudioEngine();
-
-    await engine.fadeOutAndStop(10);
-    onSetRemaining(null);
-    onSetDuration(null);
-    analytics.trackAudioStop('timer_complete');
-    onStop();
-  };
+  }, [duration, remaining, isPlaying, onSetRemaining, handleTimerComplete]);
 
   const handleSetDuration = (seconds: number) => {
     onSetDuration(seconds);
@@ -116,8 +114,7 @@ export const Timer: React.FC<TimerProps> = ({
             <button
               key={option.value}
               onClick={() => handleSetDuration(option.value)}
-              disabled={!isPlaying}
-              className="px-6 py-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl font-medium transition-colors border border-slate-600 hover:border-slate-500"
+              className="px-6 py-3 bg-slate-800 hover:bg-slate-700 rounded-xl font-medium transition-colors border border-slate-600 hover:border-slate-500"
             >
               {option.label}
             </button>
@@ -152,7 +149,9 @@ export const Timer: React.FC<TimerProps> = ({
       )}
       
       <p className="mt-4 text-xs text-slate-500 text-center">
-        When timer ends, audio will fade out smoothly over 10 seconds
+        {duration && !isPlaying
+          ? 'Timer is queued and will begin counting down when audio starts'
+          : 'When timer ends, audio will fade out smoothly over 10 seconds'}
       </p>
     </div>
   );
