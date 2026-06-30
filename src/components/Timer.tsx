@@ -123,16 +123,26 @@ export const Timer: React.FC<TimerProps> = ({
   const progress = duration && remaining ? (remaining / duration) * 100 : 0;
 
   return (
-    <div className="bg-slate-900/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50">
-      <h2 className="text-lg font-semibold mb-4 text-slate-200">Session Timer</h2>
+    <div className="studio-panel rounded-2xl p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="text-lg text-cyan-300">⌛</span>
+          <h2 className="text-sm font-semibold text-slate-100">Session Timer</h2>
+        </div>
+        {duration && (
+          <span className={isPlaying ? 'text-xs text-emerald-300' : 'text-xs text-cyan-300'}>
+            {isPlaying ? 'Running' : 'Queued'}
+          </span>
+        )}
+      </div>
 
       {!duration ? (
-        <div className="flex flex-wrap gap-3">
+        <div className="grid grid-cols-2 gap-3">
           {TIMER_OPTIONS.map((option) => (
             <button
               key={option.value}
               onClick={() => handleSetDuration(option.value)}
-              className="px-6 py-3 bg-slate-800 hover:bg-slate-700 rounded-xl font-medium transition-colors border border-slate-600 hover:border-slate-500"
+              className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-slate-200 transition hover:border-cyan-400/40 hover:bg-cyan-400/10"
               aria-label={`Set timer for ${option.label}`}
             >
               {option.label}
@@ -142,15 +152,15 @@ export const Timer: React.FC<TimerProps> = ({
       ) : (
         <div className="space-y-4">
           <div className="text-center" aria-live="polite">
-            <div className="text-4xl font-mono font-bold text-cyan-400 mb-2">
+            <div className="mb-1 font-mono text-4xl font-semibold text-cyan-300">
               {formatTime(remaining || 0)}
             </div>
-            <div className="text-sm text-slate-400">remaining</div>
+            <div className="text-xs uppercase tracking-[0.18em] text-slate-500">remaining</div>
           </div>
 
-          <div className="w-full h-2 bg-slate-700 rounded-full overflow-hidden">
+          <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">
             <div
-              className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 transition-all duration-1000"
+              className="h-full bg-gradient-to-r from-cyan-400 to-violet-500 transition-all duration-1000"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -158,7 +168,7 @@ export const Timer: React.FC<TimerProps> = ({
           <div className="flex justify-center gap-3">
             <button
               onClick={handleClearTimer}
-              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium transition-colors"
+              className="rounded-lg border border-white/10 bg-white/[0.05] px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/[0.08]"
               aria-label="Clear session timer"
             >
               Clear Timer
@@ -167,7 +177,7 @@ export const Timer: React.FC<TimerProps> = ({
         </div>
       )}
 
-      <p className="mt-4 text-xs text-slate-500 text-center">
+      <p className="mt-3 text-center text-xs leading-5 text-slate-500">
         {duration && !isPlaying
           ? 'Timer is queued and will begin counting down when audio starts'
           : 'When timer ends, audio will fade out smoothly over 10 seconds'}
