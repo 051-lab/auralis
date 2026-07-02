@@ -7,6 +7,22 @@ Legend: [P0]=critical/safety, [P1]=high, [P2]=medium, [P3]=polish.
 
 ---
 
+## Audio Foundation
+
+Highest-priority next audio tasks are tracked in detail in
+`docs/audio/AUDIO_IMPROVEMENT_BACKLOG.md` and
+`docs/audio/NEXT_AUDIO_ENGINE_TASKS.md`.
+
+- [x] [P0] Add output metering and limiter activity feedback.
+- [x] [P0] Calibrate default gain staging and document target headroom.
+- [x] [P1] Add dry export safety limiting and clear wet/dry export copy.
+- [x] [P1] Improve start/stop and timer fade curves.
+- [x] [P1] Add per-oscillator mute/solo controls.
+- [x] [P1] Add filtered noise controls.
+- [x] [P1] Add preset metadata and responsible descriptions.
+
+---
+
 ## P0 — Audio safety & correctness
 
 - [x] **Add a master limiter to the signal chain.**

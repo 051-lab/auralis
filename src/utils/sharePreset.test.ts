@@ -5,6 +5,11 @@ import { decodeSharedPreset, encodeLegacySharedPreset, encodeSharedPreset } from
 const payload: SharedPresetPayload = {
   version: 1,
   name: 'Share Test',
+  description: 'Shared preset metadata test.',
+  intendedUse: 'Test session',
+  headphonesRecommended: true,
+  caution: 'Use a low volume.',
+  tags: ['test', 'metadata'],
   oscillators: [{ frequency: 528, gain: 0.4, pan: -1 }],
   masterFX: {
     masterVolume: 0.6,
@@ -16,6 +21,9 @@ const payload: SharedPresetPayload = {
   noiseEnabled: true,
   noiseType: 'brown',
   noiseGain: 0.1,
+  noiseHighpassFrequency: 40,
+  noiseLowpassFrequency: 6400,
+  noiseStereoWidth: 0.65,
   createdAt: 1,
 };
 

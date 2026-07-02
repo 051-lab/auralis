@@ -1,9 +1,24 @@
 import * as Tone from 'tone';
+import {
+  DEFAULT_LIMITER_THRESHOLD_DB,
+  createOutputMeter,
+  createSilentOutputMeter,
+} from '@/utils/audioMeter';
+import type { OutputMeterReading } from '@/utils/audioMeter';
 import { clamp } from '@/utils/math';
 
 export type WaveformType = 'sine' | 'square' | 'sawtooth' | 'triangle';
 export type NoiseType = 'white' | 'pink' | 'brown';
 export type RecordingMode = 'wet' | 'dry';
+
+const PARAM_RAMP_SECONDS = 0.05;
+const START_FADE_SECONDS = 0.35;
+const STOP_FADE_SECONDS = 0.6;
+const NOISE_RAMP_SECONDS = 0.12;
+const MIN_NOISE_HIGHPASS_FREQUENCY = 20;
+const MAX_NOISE_HIGHPASS_FREQUENCY = 500;
+const MIN_NOISE_LOWPASS_FREQUENCY = 500;
+const MAX_NOISE_LOWPASS_FREQUENCY = 12000;
 
 export interface OscillatorConfig {
   index: number;
@@ -39,6 +54,7 @@ export class AudioEngine {
   private reverb: Tone.Reverb;
   private autoPanner: Tone.AutoPanner;
   private limiter: Tone.Limiter;
+  private dryRecorderLimiter: Tone.Limiter;
   private analyser: Tone.Analyser;
   private wetRecorder: Tone.Recorder;
   private dryRecorder: Tone.Recorder;
@@ -47,6 +63,9 @@ export class AudioEngine {
 
   private noise: Tone.Noise;
   private noiseGain: Tone.Gain;
+  private noiseHighpassFilter: Tone.Filter;
+  private noiseLowpassFilter: Tone.Filter;
+  private noiseStereoWidener: Tone.StereoWidener;
   private noiseStarted = false;
   private currentNoiseType: NoiseType = 'brown';
   private currentNoiseGain = 0.2;
@@ -62,18 +81,31 @@ export class AudioEngine {
     this.transportFade = new Tone.Volume(-Infinity);
     this.reverb = new Tone.Reverb({ decay: 6, wet: 0.3 });
     this.autoPanner = new Tone.AutoPanner({ frequency: 0.2, depth: 0.5 });
-    this.limiter = new Tone.Limiter(-1);
+    this.limiter = new Tone.Limiter(DEFAULT_LIMITER_THRESHOLD_DB);
+    this.dryRecorderLimiter = new Tone.Limiter(DEFAULT_LIMITER_THRESHOLD_DB);
     this.analyser = new Tone.Analyser('waveform', 2048);
     this.wetRecorder = new Tone.Recorder();
     this.dryRecorder = new Tone.Recorder();
 
     this.noise = new Tone.Noise(this.currentNoiseType);
     this.noiseGain = new Tone.Gain(0);
+    this.noiseHighpassFilter = new Tone.Filter({
+      type: 'highpass',
+      frequency: MIN_NOISE_HIGHPASS_FREQUENCY,
+      rolloff: -12,
+    });
+    this.noiseLowpassFilter = new Tone.Filter({
+      type: 'lowpass',
+      frequency: MAX_NOISE_LOWPASS_FREQUENCY,
+      rolloff: -12,
+    });
+    this.noiseStereoWidener = new Tone.StereoWidener(0.5);
 
     this.masterGain.connect(this.userVolume);
     this.userVolume.connect(this.transportFade);
     this.transportFade.connect(this.reverb);
-    this.transportFade.connect(this.dryRecorder);
+    this.transportFade.connect(this.dryRecorderLimiter);
+    this.dryRecorderLimiter.connect(this.dryRecorder);
     this.reverb.connect(this.autoPanner);
     this.autoPanner.connect(this.limiter);
     this.limiter.connect(this.analyser);
@@ -81,7 +113,10 @@ export class AudioEngine {
     this.limiter.connect(this.wetRecorder);
 
     this.noise.connect(this.noiseGain);
-    this.noiseGain.connect(this.masterGain);
+    this.noiseGain.connect(this.noiseHighpassFilter);
+    this.noiseHighpassFilter.connect(this.noiseLowpassFilter);
+    this.noiseLowpassFilter.connect(this.noiseStereoWidener);
+    this.noiseStereoWidener.connect(this.masterGain);
 
     for (let i = 0; i < 4; i += 1) {
       this.createOscillatorChannel(i);
@@ -144,7 +179,7 @@ export class AudioEngine {
 
     this.fadeToken += 1;
     this.transportFade.volume.cancelScheduledValues(Tone.now());
-    this.transportFade.volume.rampTo(0, 0.05);
+    this.transportFade.volume.rampTo(0, START_FADE_SECONDS);
     this.isStarted = true;
   }
 
@@ -153,27 +188,31 @@ export class AudioEngine {
 
     this.fadeToken += 1;
     this.transportFade.volume.cancelScheduledValues(Tone.now());
-    this.transportFade.volume.rampTo(-Infinity, 0.25);
-    this.stopNoise();
+    this.transportFade.volume.rampTo(-Infinity, STOP_FADE_SECONDS);
+    this.stopNoise(STOP_FADE_SECONDS);
     this.isStarted = false;
   }
 
-  public async fadeOutAndStop(duration: number = 10): Promise<void> {
-    if (!this.isStarted) return;
+  public async fadeOutAndStop(duration: number = 10): Promise<boolean> {
+    if (!this.isStarted) return false;
 
     const token = this.fadeToken + 1;
     this.fadeToken = token;
     this.transportFade.volume.cancelScheduledValues(Tone.now());
-    this.transportFade.volume.rampTo(-Infinity, duration);
-    this.stopNoise();
+    const fadeDuration = Math.max(STOP_FADE_SECONDS, duration);
+    this.transportFade.volume.rampTo(-Infinity, fadeDuration);
+    this.stopNoise(fadeDuration);
 
     await new Promise((resolve) => {
-      window.setTimeout(resolve, duration * 1000);
+      globalThis.setTimeout(resolve, fadeDuration * 1000);
     });
 
     if (this.fadeToken === token) {
       this.isStarted = false;
+      return true;
     }
+
+    return false;
   }
 
   public async startRecording(mode: RecordingMode = 'wet'): Promise<void> {
@@ -205,14 +244,14 @@ export class AudioEngine {
   }
 
   public setMasterVolume(volume: number): void {
-    this.userVolume.gain.rampTo(clamp(volume, 0, 1), 0.05);
+    this.userVolume.gain.rampTo(clamp(volume, 0, 1), PARAM_RAMP_SECONDS);
   }
 
   public setFrequency(index: number, freq: number): void {
     const oscillator = this.oscillators[index];
     if (!oscillator) return;
 
-    oscillator.frequency.rampTo(clamp(freq, 20, 20000), 0.05);
+    oscillator.frequency.rampTo(clamp(freq, 20, 20000), PARAM_RAMP_SECONDS);
   }
 
   public setGain(index: number, gain: number): void {
@@ -221,7 +260,7 @@ export class AudioEngine {
 
     const safeGain = clamp(gain, 0, 1);
     this.oscillatorGainValues[index] = safeGain;
-    oscillatorGain.gain.rampTo(safeGain, 0.05);
+    oscillatorGain.gain.rampTo(safeGain, PARAM_RAMP_SECONDS);
   }
 
   public setWaveform(index: number, waveform: WaveformType): void {
@@ -235,7 +274,7 @@ export class AudioEngine {
     const panner = this.oscillatorPanners[index];
     if (!panner) return;
 
-    panner.pan.rampTo(clamp(pan, -1, 1), 0.05);
+    panner.pan.rampTo(clamp(pan, -1, 1), PARAM_RAMP_SECONDS);
   }
 
   public setTremoloEnabled(index: number, enabled: boolean): void {
@@ -256,7 +295,7 @@ export class AudioEngine {
     lfo.stop();
     lfo.disconnect();
     tremoloGain.gain.cancelScheduledValues(Tone.now());
-    tremoloGain.gain.rampTo(1, 0.05);
+    tremoloGain.gain.rampTo(1, PARAM_RAMP_SECONDS);
     this.tremoloEnabledStates[index] = false;
   }
 
@@ -264,7 +303,7 @@ export class AudioEngine {
     const lfo = this.tremoloLFOs[index];
     if (!lfo) return;
 
-    lfo.frequency.rampTo(clamp(rate, 0.1, 30), 0.05);
+    lfo.frequency.rampTo(clamp(rate, 0.1, 30), PARAM_RAMP_SECONDS);
   }
 
   public setTremoloDepth(index: number, depth: number): void {
@@ -282,7 +321,7 @@ export class AudioEngine {
   }
 
   public setReverbWet(wet: number): void {
-    this.reverb.wet.rampTo(clamp(wet, 0, 1), 0.05);
+    this.reverb.wet.rampTo(clamp(wet, 0, 1), PARAM_RAMP_SECONDS);
   }
 
   public setReverbDecay(decay: number): void {
@@ -291,11 +330,11 @@ export class AudioEngine {
   }
 
   public setAutoPannerRate(rate: number): void {
-    this.autoPanner.frequency.rampTo(clamp(rate, 0, 20), 0.05);
+    this.autoPanner.frequency.rampTo(clamp(rate, 0, 20), PARAM_RAMP_SECONDS);
   }
 
   public setAutoPannerDepth(depth: number): void {
-    this.autoPanner.depth.rampTo(clamp(depth, 0, 1), 0.05);
+    this.autoPanner.depth.rampTo(clamp(depth, 0, 1), PARAM_RAMP_SECONDS);
   }
 
   public setNoiseType(type: NoiseType): void {
@@ -307,8 +346,26 @@ export class AudioEngine {
     this.currentNoiseGain = clamp(gain, 0, 1);
 
     if (this.isStarted && this.noiseStarted) {
-      this.noiseGain.gain.rampTo(this.currentNoiseGain, 0.05);
+      this.noiseGain.gain.rampTo(this.currentNoiseGain, PARAM_RAMP_SECONDS);
     }
+  }
+
+  public setNoiseHighpassFrequency(frequency: number): void {
+    this.noiseHighpassFilter.frequency.rampTo(
+      clamp(frequency, MIN_NOISE_HIGHPASS_FREQUENCY, MAX_NOISE_HIGHPASS_FREQUENCY),
+      PARAM_RAMP_SECONDS
+    );
+  }
+
+  public setNoiseLowpassFrequency(frequency: number): void {
+    this.noiseLowpassFilter.frequency.rampTo(
+      clamp(frequency, MIN_NOISE_LOWPASS_FREQUENCY, MAX_NOISE_LOWPASS_FREQUENCY),
+      PARAM_RAMP_SECONDS
+    );
+  }
+
+  public setNoiseStereoWidth(width: number): void {
+    this.noiseStereoWidener.width.rampTo(clamp(width, 0, 1), PARAM_RAMP_SECONDS);
   }
 
   public startNoise(): void {
@@ -317,15 +374,37 @@ export class AudioEngine {
       this.noiseStarted = true;
     }
 
-    this.noiseGain.gain.rampTo(this.currentNoiseGain, 0.05);
+    this.noiseGain.gain.rampTo(this.currentNoiseGain, NOISE_RAMP_SECONDS);
   }
 
-  public stopNoise(): void {
-    this.noiseGain.gain.rampTo(0, 0.05);
+  public stopNoise(duration: number = NOISE_RAMP_SECONDS): void {
+    this.noiseGain.gain.rampTo(0, Math.max(NOISE_RAMP_SECONDS, duration));
   }
 
   public getAnalyser(): Tone.Analyser {
     return this.analyser;
+  }
+
+  public getOutputMeter(): OutputMeterReading {
+    if (!this.isStarted) {
+      return createSilentOutputMeter();
+    }
+
+    try {
+      const analyserValue = this.analyser.getValue();
+
+      if (typeof analyserValue === 'number') {
+        return createOutputMeter([analyserValue], {
+          limiterThresholdDb: DEFAULT_LIMITER_THRESHOLD_DB,
+        });
+      }
+
+      return createOutputMeter(analyserValue as ArrayLike<number>, {
+        limiterThresholdDb: DEFAULT_LIMITER_THRESHOLD_DB,
+      });
+    } catch {
+      return createSilentOutputMeter();
+    }
   }
 
   public isRunning(): boolean {

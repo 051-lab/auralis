@@ -26,14 +26,29 @@ import {
 } from 'lucide-react';
 import { getAudioEngine } from '@/lib/audioEngine';
 import type { NoiseType, RecordingMode, WaveformType } from '@/lib/audioEngine';
-import { useAuralisStore } from '@/store/useAuralisStore';
+import { getEffectiveOscillatorGain, useAuralisStore } from '@/store/useAuralisStore';
 import type { MasterFXState, OscillatorState, SharedPresetPayload } from '@/store/useAuralisStore';
 import { OscillatorPanel } from '@/components/OscillatorPanel';
+import { OutputMeter } from '@/components/OutputMeter';
 import { Visualizer } from '@/components/Visualizer';
 import { Timer } from '@/components/Timer';
-import { linearToLogFrequency } from '@/utils/audioMath';
+import { formatFrequency, linearToLogFrequency } from '@/utils/audioMath';
+import {
+  MAX_BINAURAL_BEAT_FREQUENCY,
+  MAX_BINAURAL_CARRIER_FREQUENCY,
+  MIN_BINAURAL_BEAT_FREQUENCY,
+  createBinauralPair,
+  getBinauralGuidance,
+  normalizeBinauralBaseFrequency,
+  normalizeBinauralBeatFrequency,
+} from '@/utils/binaural';
 import { clamp } from '@/utils/math';
 import { decodeSharedPreset, encodeSharedPreset } from '@/utils/sharePreset';
+import {
+  getRecordingModeDescription,
+  getRecordingModeLabel,
+} from '@/utils/recordingExport';
+import { getPlaybackStatus, isAudiblePlayback } from '@/utils/playbackState';
 import { analytics } from '@/lib/analytics';
 import { useAnalytics } from '@/lib/useAnalytics';
 import packageJson from '../../package.json';
@@ -62,8 +77,21 @@ const BINAURAL_PRESETS = [
 
 const NOISE_TYPES: NoiseType[] = ['brown', 'pink', 'white'];
 const MAX_SHARE_URL_LENGTH = 2000;
+const BINAURAL_TONE_CLASSES = {
+  cyan: 'border-cyan-400/25 bg-cyan-400/10 text-cyan-300',
+  emerald: 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300',
+  amber: 'border-amber-400/25 bg-amber-400/10 text-amber-300',
+  violet: 'border-violet-400/25 bg-violet-400/10 text-violet-300',
+};
+const BINAURAL_ACKNOWLEDGEMENT_STORAGE_KEY = 'auralis-binaural-safety-acknowledged';
 type ExportFormat = 'wav' | 'webm';
 type ExportSampleRate = '44.1' | '48';
+
+type PendingBinauralActivation = {
+  baseFrequency: number;
+  beatFrequency: number;
+  label?: string;
+};
 
 function getRecordingExtension(mimeType: string): string {
   if (mimeType.includes('wav')) return 'wav';
@@ -183,14 +211,27 @@ function percentInputValue(value: number): number {
   return Number((value * 100).toFixed(0));
 }
 
+function formatFilterFrequency(value: number): string {
+  return formatFrequency(value).replace('.00 ', ' ');
+}
+
+function formatBinauralNumber(value: number): string {
+  return Number(value.toFixed(2)).toString();
+}
+
 export default function Home() {
   const [engine, setEngine] = useState<AudioEngineInstance | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isFadingOut, setIsFadingOut] = useState(false);
   const [presetName, setPresetName] = useState('');
   const [recordingMode, setRecordingMode] = useState<RecordingMode>('wet');
   const [exportFormat, setExportFormat] = useState<ExportFormat>('webm');
   const [exportSampleRate, setExportSampleRate] = useState<ExportSampleRate>('48');
   const [binauralBaseFrequency, setBinauralBaseFrequency] = useState(400);
+  const [customBinauralBeatFrequency, setCustomBinauralBeatFrequency] = useState(6);
+  const [hasAcknowledgedBinauralSafety, setHasAcknowledgedBinauralSafety] = useState(false);
+  const [pendingBinauralActivation, setPendingBinauralActivation] =
+    useState<PendingBinauralActivation | null>(null);
   const [presetSearch, setPresetSearch] = useState('');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [shareMessage, setShareMessage] = useState<string | null>(null);
@@ -204,7 +245,10 @@ export default function Home() {
     noiseType: NoiseType;
     noiseGain: number;
     noiseEnabled: boolean;
-    isPlaying: boolean;
+    noiseHighpassFrequency: number;
+    noiseLowpassFrequency: number;
+    noiseStereoWidth: number;
+    isAudible: boolean;
   } | null>(null);
 
   useAnalytics();
@@ -221,10 +265,15 @@ export default function Home() {
     noiseEnabled,
     noiseType,
     noiseGain,
+    noiseHighpassFrequency,
+    noiseLowpassFrequency,
+    noiseStereoWidth,
     setOscillatorFrequency,
     setOscillatorGain,
     setOscillatorWaveform,
     setOscillatorPan,
+    setOscillatorMuted,
+    setOscillatorSoloed,
     setOscillatorTremoloEnabled,
     setOscillatorTremoloRate,
     setOscillatorTremoloDepth,
@@ -243,11 +292,26 @@ export default function Home() {
     setNoiseEnabled,
     setNoiseType,
     setNoiseGain,
+    setNoiseHighpassFrequency,
+    setNoiseLowpassFrequency,
+    setNoiseStereoWidth,
     applySharedPreset,
   } = useAuralisStore();
 
+  const isAudible = isAudiblePlayback(isPlaying, isFadingOut);
+
   useEffect(() => {
     setEngine(getAudioEngine());
+  }, []);
+
+  useEffect(() => {
+    try {
+      setHasAcknowledgedBinauralSafety(
+        window.localStorage.getItem(BINAURAL_ACKNOWLEDGEMENT_STORAGE_KEY) === 'true'
+      );
+    } catch {
+      setHasAcknowledgedBinauralSafety(false);
+    }
   }, []);
 
   const ensureEngine = (): AudioEngineInstance => {
@@ -282,16 +346,23 @@ export default function Home() {
     if (!engine) return;
 
     const previous = previousSyncRef.current;
+    const hasSoloedOscillator = oscillators.some((oscillator) => oscillator.soloed);
+    const previousHasSoloedOscillator =
+      previous?.oscillators.some((oscillator) => oscillator.soloed) ?? false;
 
     oscillators.forEach((oscillator, index) => {
       const previousOscillator = previous?.oscillators[index];
+      const effectiveGain = getEffectiveOscillatorGain(oscillator, hasSoloedOscillator);
+      const previousEffectiveGain = previousOscillator
+        ? getEffectiveOscillatorGain(previousOscillator, previousHasSoloedOscillator)
+        : undefined;
 
       if (!previousOscillator || previousOscillator.frequency !== oscillator.frequency) {
         engine.setFrequency(index, oscillator.frequency);
       }
 
-      if (!previousOscillator || previousOscillator.gain !== oscillator.gain) {
-        engine.setGain(index, oscillator.gain);
+      if (!previousOscillator || previousEffectiveGain !== effectiveGain) {
+        engine.setGain(index, effectiveGain);
       }
 
       if (!previousOscillator || previousOscillator.waveform !== oscillator.waveform) {
@@ -343,7 +414,19 @@ export default function Home() {
       engine.setNoiseGain(noiseGain);
     }
 
-    if (isPlaying && noiseEnabled && noiseGain > 0) {
+    if (!previous || previous.noiseHighpassFrequency !== noiseHighpassFrequency) {
+      engine.setNoiseHighpassFrequency(noiseHighpassFrequency);
+    }
+
+    if (!previous || previous.noiseLowpassFrequency !== noiseLowpassFrequency) {
+      engine.setNoiseLowpassFrequency(noiseLowpassFrequency);
+    }
+
+    if (!previous || previous.noiseStereoWidth !== noiseStereoWidth) {
+      engine.setNoiseStereoWidth(noiseStereoWidth);
+    }
+
+    if (isAudible && noiseEnabled && noiseGain > 0) {
       engine.startNoise();
     } else {
       engine.stopNoise();
@@ -355,13 +438,27 @@ export default function Home() {
       noiseType,
       noiseGain,
       noiseEnabled,
-      isPlaying,
+      noiseHighpassFrequency,
+      noiseLowpassFrequency,
+      noiseStereoWidth,
+      isAudible,
     };
-  }, [engine, oscillators, masterFX, noiseEnabled, noiseType, noiseGain, isPlaying]);
+  }, [
+    engine,
+    oscillators,
+    masterFX,
+    noiseEnabled,
+    noiseType,
+    noiseGain,
+    noiseHighpassFrequency,
+    noiseLowpassFrequency,
+    noiseStereoWidth,
+    isAudible,
+  ]);
 
   useEffect(() => {
     const requestWakeLock = async () => {
-      if (isPlaying && 'wakeLock' in navigator) {
+      if (isAudible && 'wakeLock' in navigator) {
         try {
           wakeLockRef.current = await navigator.wakeLock.request('screen');
           wakeLockRef.current.addEventListener('release', () => {
@@ -374,7 +471,7 @@ export default function Home() {
     };
 
     const handleVisibilityChange = async () => {
-      if (document.visibilityState === 'visible' && isPlaying && 'wakeLock' in navigator) {
+      if (document.visibilityState === 'visible' && isAudible && 'wakeLock' in navigator) {
         await requestWakeLock();
       }
     };
@@ -386,7 +483,7 @@ export default function Home() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       wakeLockRef.current?.release();
     };
-  }, [isPlaying]);
+  }, [isAudible]);
 
   useEffect(() => {
     const isTypingTarget = (target: EventTarget | null): boolean => {
@@ -437,6 +534,7 @@ export default function Home() {
   const handleStart = async () => {
     const activeEngine = ensureEngine();
 
+    setIsFadingOut(false);
     await activeEngine.start();
 
     if (noiseEnabled && noiseGain > 0) {
@@ -450,26 +548,41 @@ export default function Home() {
   const handleStop = async () => {
     const activeEngine = ensureEngine();
 
-    await activeEngine.fadeOutAndStop(2);
-
     setIsPlaying(false);
-    analytics.trackAudioStop('manual');
+    setIsFadingOut(true);
 
     if (timerRemaining !== null && timerRemaining > 0) {
       setTimerDuration(null);
       setTimerRemaining(null);
+    }
+
+    const didCompleteFade = await activeEngine.fadeOutAndStop(2);
+
+    if (didCompleteFade) {
+      setIsFadingOut(false);
+      analytics.trackAudioStop('manual');
+    } else if (!activeEngine.isRunning()) {
+      setIsFadingOut(false);
     }
   };
 
   const handleTimerComplete = async () => {
     const activeEngine = ensureEngine();
 
-    await activeEngine.fadeOutAndStop(10);
     setIsPlaying(false);
+    setIsFadingOut(true);
     setTimerDuration(null);
     setTimerRemaining(null);
-    analytics.trackAudioStop('timer_complete');
-    setStatusMessage('Session timer complete. Audio faded out smoothly.');
+
+    const didCompleteFade = await activeEngine.fadeOutAndStop(10);
+
+    if (didCompleteFade) {
+      setIsFadingOut(false);
+      analytics.trackAudioStop('timer_complete');
+      setStatusMessage('Session timer complete. Audio faded out smoothly.');
+    } else if (!activeEngine.isRunning()) {
+      setIsFadingOut(false);
+    }
   };
 
   const handleFrequencyChange = (index: number, linearValue: number) => {
@@ -487,6 +600,14 @@ export default function Home() {
 
   const handlePanChange = (index: number, pan: number) => {
     setOscillatorPan(index, pan);
+  };
+
+  const handleMuteToggle = (index: number, muted: boolean) => {
+    setOscillatorMuted(index, muted);
+  };
+
+  const handleSoloToggle = (index: number, soloed: boolean) => {
+    setOscillatorSoloed(index, soloed);
   };
 
   const handleTremoloToggle = (index: number, enabled: boolean) => {
@@ -541,6 +662,18 @@ export default function Home() {
     setNoiseGain(gain);
   };
 
+  const handleNoiseHighpassChange = (frequency: number) => {
+    setNoiseHighpassFrequency(frequency);
+  };
+
+  const handleNoiseLowpassChange = (frequency: number) => {
+    setNoiseLowpassFrequency(frequency);
+  };
+
+  const handleNoiseStereoWidthChange = (width: number) => {
+    setNoiseStereoWidth(width);
+  };
+
   const handlePercentInputChange = (
     value: string,
     onChange: (nextValue: number) => void
@@ -551,32 +684,79 @@ export default function Home() {
     onChange(clampNumber(parsedValue, 0, 100) / 100);
   };
 
-  const activateBinaural = (baseFreq: number, beatFreq: number) => {
-    const activePresetName = BINAURAL_PRESETS.find((preset) => preset.freq === beatFreq)?.name ?? 'Custom';
-    const safeBaseFrequency = clampNumber(baseFreq, 20, 20000 - beatFreq);
+  const startBinaural = (baseFreq: number, beatFreq: number, label?: string) => {
+    const pair = createBinauralPair(baseFreq, beatFreq);
+    const activePresetName =
+      label ?? BINAURAL_PRESETS.find((preset) => preset.freq === pair.beatFrequency)?.name ?? 'Custom';
+    const adjustmentNote =
+      pair.baseAdjusted || pair.beatAdjusted
+        ? ` Adjusted to ${formatBinauralNumber(pair.baseFrequency)} Hz + ${formatBinauralNumber(pair.beatFrequency)} Hz to stay in range.`
+        : '';
 
     binauralSnapshotRef.current = oscillators.map((oscillator) => ({ ...oscillator }));
     binauralMasterFXSnapshotRef.current = { ...masterFX };
-    setBinauralMode(true, `${safeBaseFrequency}Hz + ${beatFreq}Hz`);
+    setBinauralMode(
+      true,
+      `${formatBinauralNumber(pair.baseFrequency)}Hz + ${formatBinauralNumber(pair.beatFrequency)}Hz`
+    );
+
+    oscillators.forEach((_, index) => {
+      setOscillatorMuted(index, false);
+      setOscillatorSoloed(index, false);
+    });
 
     setReverbWet(0);
     setAutoPannerDepth(0);
 
-    setOscillatorFrequency(0, safeBaseFrequency);
+    setOscillatorFrequency(0, pair.baseFrequency);
     setOscillatorPan(0, -1);
     setOscillatorGain(0, 0.5);
 
-    setOscillatorFrequency(1, safeBaseFrequency + beatFreq);
+    setOscillatorFrequency(1, pair.upperFrequency);
     setOscillatorPan(1, 1);
     setOscillatorGain(1, 0.5);
 
     setOscillatorGain(2, 0);
     setOscillatorGain(3, 0);
 
-    analytics.trackBinauralActivate(activePresetName, beatFreq);
+    analytics.trackBinauralActivate(activePresetName, pair.beatFrequency);
     setStatusMessage(
-      `Binaural mode activated: ${activePresetName}. Reverb and panning depth disabled until exit.`
+      `Binaural mode activated: ${activePresetName} (${pair.guidance.label}).${adjustmentNote} ${pair.guidance.caution} Reverb and panning depth disabled until exit.`
     );
+  };
+
+  const activateBinaural = (baseFreq: number, beatFreq: number, label?: string) => {
+    if (!hasAcknowledgedBinauralSafety) {
+      setPendingBinauralActivation({ baseFrequency: baseFreq, beatFrequency: beatFreq, label });
+      setStatusMessage('Confirm stereo headphones and low volume before starting binaural mode.');
+      return;
+    }
+
+    startBinaural(baseFreq, beatFreq, label);
+  };
+
+  const confirmBinauralSafety = () => {
+    setHasAcknowledgedBinauralSafety(true);
+
+    try {
+      window.localStorage.setItem(BINAURAL_ACKNOWLEDGEMENT_STORAGE_KEY, 'true');
+    } catch {
+      // Local storage is optional; the confirmation still applies for this session.
+    }
+
+    if (pendingBinauralActivation) {
+      startBinaural(
+        pendingBinauralActivation.baseFrequency,
+        pendingBinauralActivation.beatFrequency,
+        pendingBinauralActivation.label
+      );
+      setPendingBinauralActivation(null);
+    }
+  };
+
+  const cancelBinauralSafety = () => {
+    setPendingBinauralActivation(null);
+    setStatusMessage('Binaural activation cancelled.');
   };
 
   const exitBinaural = () => {
@@ -589,6 +769,8 @@ export default function Home() {
         setOscillatorGain(index, oscillator.gain);
         setOscillatorWaveform(index, oscillator.waveform);
         setOscillatorPan(index, oscillator.pan);
+        setOscillatorMuted(index, oscillator.muted);
+        setOscillatorSoloed(index, oscillator.soloed);
         setOscillatorTremoloEnabled(index, oscillator.tremoloEnabled);
         setOscillatorTremoloRate(index, oscillator.tremoloRate);
         setOscillatorTremoloDepth(index, oscillator.tremoloDepth);
@@ -627,11 +809,19 @@ export default function Home() {
       const sharedPreset: SharedPresetPayload = {
         version: 1,
         name: presetName.trim() || 'Auralis Shared Preset',
+        description: 'Shared Auralis sound session generated from the current controls.',
+        intendedUse: 'Shared session',
+        headphonesRecommended: isBinauralMode,
+        caution: 'Start at low volume and stop if the sound feels uncomfortable.',
+        tags: isBinauralMode ? ['shared', 'binaural'] : ['shared'],
         oscillators,
         masterFX,
         noiseEnabled,
         noiseType,
         noiseGain,
+        noiseHighpassFrequency,
+        noiseLowpassFrequency,
+        noiseStereoWidth,
         isBinauralMode,
         binauralPreset,
         createdAt: Date.now(),
@@ -666,7 +856,7 @@ export default function Home() {
 
     await activeEngine.startRecording(recordingMode);
     setIsRecording(true);
-    setStatusMessage(`Recording started (${recordingMode} mix).`);
+    setStatusMessage(`Recording started: ${getRecordingModeLabel(recordingMode)}.`);
   };
 
   const handleStopRecording = async () => {
@@ -695,7 +885,11 @@ export default function Home() {
       analytics.trackExport();
       setLastExportName(filename);
       setStatusMessage(
-        `Recording exported: ${filename}. ${exportFormat === 'wav' ? `Rendered WAV at ${exportSampleRate} kHz.` : `Browser encoded ${blob.type || extension}.`}`
+        `Recording exported: ${filename}. ${getRecordingModeLabel(recordingMode)}. ${
+          exportFormat === 'wav'
+            ? `Rendered WAV at ${exportSampleRate} kHz.`
+            : `Browser encoded ${blob.type || extension}.`
+        }`
       );
     } catch (err) {
       console.error('Recording error:', err);
@@ -705,12 +899,29 @@ export default function Home() {
   };
 
   const currentPreset = presets[0];
-  const activeStatus = isPlaying ? 'Live' : 'Standby';
+  const activeStatus = getPlaybackStatus(isPlaying, isFadingOut);
   const remainingLabel = timerRemaining !== null ? formatTime(timerRemaining) : '--:--';
   const builtInPresetCount = presets.filter((preset) => preset.id.startsWith('built-in-')).length;
   const filteredPresets = presets.filter((preset) =>
     preset.name.toLowerCase().includes(presetSearch.trim().toLowerCase())
   );
+  const customBinauralPair = createBinauralPair(
+    binauralBaseFrequency,
+    customBinauralBeatFrequency
+  );
+  const customBinauralGuidance = customBinauralPair.guidance;
+  const pendingBinauralPair = pendingBinauralActivation
+    ? createBinauralPair(
+        pendingBinauralActivation.baseFrequency,
+        pendingBinauralActivation.beatFrequency
+      )
+    : null;
+  const pendingBinauralLabel =
+    pendingBinauralActivation?.label ??
+    (pendingBinauralPair
+      ? BINAURAL_PRESETS.find((preset) => preset.freq === pendingBinauralPair.beatFrequency)
+          ?.name ?? 'Custom'
+      : null);
 
   return (
     <main className="min-h-screen overflow-hidden bg-[#060b18] text-slate-100">
@@ -731,7 +942,7 @@ export default function Home() {
             </div>
 
             <div className="flex flex-wrap items-center gap-3 text-sm">
-              <StatusPill tone={isPlaying ? 'emerald' : 'cyan'}>
+              <StatusPill tone={isFadingOut ? 'amber' : isPlaying ? 'emerald' : 'cyan'}>
                 <Circle size={8} fill="currentColor" />
                 {activeStatus}
               </StatusPill>
@@ -749,6 +960,7 @@ export default function Home() {
                 />
                 <span className="w-10 text-right text-slate-200">{percentInputValue(masterFX.masterVolume)}%</span>
               </label>
+              <OutputMeter engine={engine} isPlaying={isAudible} className="w-full sm:w-[280px] lg:w-[260px]" />
               <select
                 value={recordingMode}
                 onChange={(event) => setRecordingMode(event.target.value as RecordingMode)}
@@ -756,8 +968,8 @@ export default function Home() {
                 aria-label="Recording mix mode"
                 className="studio-select rounded-xl px-3 py-2 text-sm outline-none focus:border-cyan-400 disabled:opacity-50"
               >
-                <option value="wet">Wet Export</option>
-                <option value="dry">Dry Export</option>
+                <option value="wet">{getRecordingModeLabel('wet')}</option>
+                <option value="dry">{getRecordingModeLabel('dry')}</option>
               </select>
             </div>
           </div>
@@ -811,7 +1023,7 @@ export default function Home() {
               </span>
               <span className="flex items-center gap-2 font-medium text-cyan-300">
                 <Circle size={8} fill="currentColor" />
-                {isPlaying ? 'Active' : 'Standby'}
+                {activeStatus}
               </span>
               {timerRemaining !== null && <span className="font-mono text-slate-200">{remainingLabel}</span>}
               {isRecording && <span className="text-red-300">REC {recordingMode.toUpperCase()}</span>}
@@ -889,7 +1101,7 @@ export default function Home() {
                       </button>
                     </div>
                   </div>
-                  <Visualizer isActive={isPlaying} />
+                  <Visualizer isActive={isAudible} />
                 </div>
                 <div className="border-t border-white/10 p-5 xl:border-l xl:border-t-0">
                   <h3 className="mb-5 text-sm font-semibold text-slate-300">Session Overview</h3>
@@ -904,7 +1116,7 @@ export default function Home() {
                     </div>
                     <div className="flex justify-between gap-4">
                       <dt className="text-slate-500">Status</dt>
-                      <dd className={isPlaying ? 'text-emerald-300' : 'text-cyan-300'}>{activeStatus}</dd>
+                      <dd className={isFadingOut ? 'text-amber-300' : isPlaying ? 'text-emerald-300' : 'text-cyan-300'}>{activeStatus}</dd>
                     </div>
                   </dl>
                   <p className="mt-6 text-xs leading-5 text-slate-500">
@@ -915,20 +1127,27 @@ export default function Home() {
 
               <div className="mt-auto border-t border-white/10 p-5">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                  <h2 className="text-sm font-semibold text-slate-100">Brainwave Entrainment</h2>
+                  <div>
+                    <h2 className="text-sm font-semibold text-slate-100">Brainwave Entrainment</h2>
+                    <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500">
+                      Binaural designs need stereo headphones. Beat ranges are descriptive only; they do not guarantee a brain state.
+                    </p>
+                  </div>
                   {!isBinauralMode && (
                     <label className="flex items-center gap-2 text-xs text-slate-400">
                       <span>Base</span>
                       <input
                         type="number"
                         min="20"
-                        max="19960"
+                        max={MAX_BINAURAL_CARRIER_FREQUENCY - MIN_BINAURAL_BEAT_FREQUENCY}
                         step="0.01"
                         value={Number(binauralBaseFrequency.toFixed(2))}
                         onChange={(event) => {
                           const parsedValue = parseFloat(event.target.value);
                           if (!Number.isNaN(parsedValue)) {
-                            setBinauralBaseFrequency(clampNumber(parsedValue, 20, 19960));
+                            setBinauralBaseFrequency(
+                              normalizeBinauralBaseFrequency(parsedValue, customBinauralBeatFrequency)
+                            );
                           }
                         }}
                         className={numberInputClass}
@@ -942,10 +1161,20 @@ export default function Home() {
                 {isBinauralMode ? (
                   <div className="flex flex-col gap-4 rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-4 md:flex-row md:items-center md:justify-between">
                     <div>
-                      <p className="font-medium text-emerald-300">Binaural Mode Active</p>
-                      <p className="text-sm text-slate-400">
-                        {binauralPreset ?? 'Oscillators 1 & 2 panned hard L/R with beat frequency'}
-                      </p>
+                      {(() => {
+                        const activeBeatFrequency = Number(binauralPreset?.match(/\+ (\d+(?:\.\d+)?)Hz/)?.[1] ?? 0);
+                        const guidance = getBinauralGuidance(activeBeatFrequency);
+
+                        return (
+                          <>
+                            <p className="font-medium text-emerald-300">Binaural Mode Active</p>
+                            <p className="text-sm text-slate-400">
+                              {binauralPreset ?? 'Oscillators 1 & 2 panned hard L/R with beat frequency'}
+                            </p>
+                            <p className="mt-2 text-xs leading-5 text-slate-500">{guidance.caution}</p>
+                          </>
+                        );
+                      })()}
                     </div>
                     <button
                       onClick={exitBinaural}
@@ -955,18 +1184,150 @@ export default function Home() {
                     </button>
                   </div>
                 ) : (
-                  <div className="grid gap-3 md:grid-cols-5">
-                    {BINAURAL_PRESETS.map((preset) => (
-                      <button
-                        key={preset.name}
-                        onClick={() => activateBinaural(binauralBaseFrequency, preset.freq)}
-                        className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm transition hover:border-cyan-400/50 hover:bg-cyan-400/10"
-                        aria-label={`Activate ${preset.name} binaural preset at ${preset.freq} hertz`}
-                      >
-                        <span className="block font-semibold text-slate-100">{preset.name}</span>
-                        <span className="text-xs text-slate-400">{preset.freq} Hz</span>
-                      </button>
-                    ))}
+                  <div className="space-y-3">
+                    <div className="grid gap-3 md:grid-cols-5">
+                      {BINAURAL_PRESETS.map((preset) => {
+                        const guidance = getBinauralGuidance(preset.freq);
+
+                        return (
+                          <button
+                            key={preset.name}
+                            onClick={() => activateBinaural(binauralBaseFrequency, preset.freq)}
+                            className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-left text-sm transition hover:border-cyan-400/50 hover:bg-cyan-400/10"
+                            aria-label={`Activate ${preset.name} binaural preset at ${preset.freq} hertz. ${guidance.label}. ${guidance.caution}`}
+                          >
+                            <span className="block font-semibold text-slate-100">{preset.name}</span>
+                            <span className="mt-1 flex items-center justify-between gap-2 text-xs text-slate-400">
+                              {preset.freq} Hz
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${BINAURAL_TONE_CLASSES[guidance.tone]}`}>
+                                {guidance.label}
+                              </span>
+                            </span>
+                            <span className="mt-2 block text-xs leading-4 text-slate-500">{guidance.summary}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {pendingBinauralPair && !hasAcknowledgedBinauralSafety && (
+                      <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-4">
+                        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                          <div className="max-w-3xl">
+                            <div className="mb-2 flex flex-wrap items-center gap-2">
+                              <Headphones size={16} className="text-amber-200" />
+                              <h3 className="text-sm font-semibold text-amber-100">
+                                Confirm Binaural Listening Setup
+                              </h3>
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${BINAURAL_TONE_CLASSES[pendingBinauralPair.guidance.tone]}`}>
+                                {pendingBinauralPair.guidance.label}
+                              </span>
+                            </div>
+                            <p className="text-sm text-slate-300">
+                              {pendingBinauralLabel} will use{' '}
+                              <span className="font-mono text-slate-100">
+                                L {formatBinauralNumber(pendingBinauralPair.baseFrequency)} Hz / R{' '}
+                                {formatBinauralNumber(pendingBinauralPair.upperFrequency)} Hz
+                              </span>
+                              .
+                            </p>
+                            <p className="mt-2 text-xs leading-5 text-slate-500">
+                              Use stereo headphones, start at low volume, and stop if the sound feels uncomfortable. Binaural beat ranges are descriptive only and do not guarantee a brain state.
+                            </p>
+                          </div>
+                          <div className="flex flex-col gap-2 sm:flex-row lg:flex-col">
+                            <button
+                              type="button"
+                              onClick={confirmBinauralSafety}
+                              className="rounded-lg bg-amber-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-200"
+                            >
+                              I’m Using Headphones
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelBinauralSafety}
+                              className="rounded-lg border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/[0.08]"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="rounded-xl border border-white/10 bg-white/[0.035] p-4">
+                      <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-sm font-semibold text-slate-100">Custom Binaural Builder</h3>
+                            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${BINAURAL_TONE_CLASSES[customBinauralGuidance.tone]}`}>
+                              {customBinauralGuidance.label}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs leading-5 text-slate-500">
+                            Type an exact beat difference and preview the generated left/right carrier pair.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            activateBinaural(
+                              customBinauralPair.baseFrequency,
+                              customBinauralPair.beatFrequency,
+                              `Custom ${formatBinauralNumber(customBinauralPair.beatFrequency)}Hz`
+                            )
+                          }
+                          className="inline-flex items-center justify-center rounded-lg border border-cyan-400/35 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-200 transition hover:bg-cyan-400/15"
+                        >
+                          Activate Custom Pair
+                        </button>
+                      </div>
+
+                      <div className="grid gap-3 md:grid-cols-[1fr_1fr_1.4fr]">
+                        <label className="space-y-1 text-xs text-slate-400">
+                          <span>Beat Difference</span>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min={MIN_BINAURAL_BEAT_FREQUENCY}
+                              max={MAX_BINAURAL_BEAT_FREQUENCY}
+                              step="0.1"
+                              value={Number(customBinauralBeatFrequency.toFixed(2))}
+                              onChange={(event) => {
+                                const parsedValue = parseFloat(event.target.value);
+                                if (!Number.isNaN(parsedValue)) {
+                                  const safeBeatFrequency = normalizeBinauralBeatFrequency(parsedValue);
+
+                                  setCustomBinauralBeatFrequency(safeBeatFrequency);
+                                  setBinauralBaseFrequency((currentBaseFrequency) =>
+                                    normalizeBinauralBaseFrequency(
+                                      currentBaseFrequency,
+                                      safeBeatFrequency
+                                    )
+                                  );
+                                }
+                              }}
+                              className={numberInputClass}
+                              aria-label="Custom binaural beat difference in hertz"
+                            />
+                            <span>Hz</span>
+                          </div>
+                        </label>
+
+                        <div className="space-y-1 text-xs text-slate-400">
+                          <span>Carrier Pair</span>
+                          <div className="rounded-lg border border-white/10 bg-slate-950/50 px-3 py-2 font-mono text-slate-200">
+                            L {formatBinauralNumber(customBinauralPair.baseFrequency)} Hz
+                            <span className="mx-2 text-slate-600">/</span>
+                            R {formatBinauralNumber(customBinauralPair.upperFrequency)} Hz
+                          </div>
+                        </div>
+
+                        <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2 text-xs leading-5 text-slate-500">
+                          <p className="text-slate-400">{customBinauralGuidance.summary}</p>
+                          <p>{customBinauralGuidance.caution}</p>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1019,7 +1380,7 @@ export default function Home() {
                   {isRecording ? 'Export Recording' : 'Arm Recorder'}
                 </button>
                 <p className="text-xs leading-5 text-slate-500">
-                  Browser-native capture; WAV targets render on export.
+                  {getRecordingModeDescription(recordingMode)} Browser-native capture; WAV targets render on export.
                 </p>
               </div>
             </GlassPanel>
@@ -1065,6 +1426,36 @@ export default function Home() {
                 step={0.01}
                 readout={`${percentInputValue(noiseGain)}%`}
                 onChange={handleNoiseGainChange}
+                tone="cyan"
+              />
+              <ControlSlider
+                label="High-pass"
+                value={noiseHighpassFrequency}
+                min={20}
+                max={500}
+                step={1}
+                readout={formatFilterFrequency(noiseHighpassFrequency)}
+                onChange={handleNoiseHighpassChange}
+                tone="cyan"
+              />
+              <ControlSlider
+                label="Low-pass"
+                value={noiseLowpassFrequency}
+                min={500}
+                max={12000}
+                step={10}
+                readout={formatFilterFrequency(noiseLowpassFrequency)}
+                onChange={handleNoiseLowpassChange}
+                tone="cyan"
+              />
+              <ControlSlider
+                label="Stereo Width"
+                value={noiseStereoWidth}
+                min={0}
+                max={1}
+                step={0.01}
+                readout={`${percentInputValue(noiseStereoWidth)}%`}
+                onChange={handleNoiseStereoWidthChange}
                 tone="cyan"
               />
             </Card>
@@ -1128,15 +1519,16 @@ export default function Home() {
                 <Headphones size={16} className="text-cyan-300" />
                 Signal Chain
               </h3>
-              <div className="grid grid-cols-4 items-start gap-2 text-center text-xs text-slate-400">
+              <div className="grid grid-cols-5 items-start gap-2 text-center text-xs text-slate-400">
                 {[
                   { label: 'Oscillators', icon: AudioWaveform },
                   { label: 'Noise', icon: Waves },
                   { label: 'Effects', icon: Boxes },
+                  { label: 'Limiter', icon: Gauge },
                   { label: 'Output', icon: Headphones },
                 ].map(({ label, icon: Icon }, index) => (
                   <div key={label} className="relative space-y-2">
-                    {index < 3 && (
+                    {index < 4 && (
                       <span className="absolute left-[calc(50%+1.35rem)] top-5 hidden h-px w-[calc(100%-1.35rem)] bg-gradient-to-r from-cyan-400/45 to-violet-400/35 md:block" />
                     )}
                     <div className="mx-auto grid h-10 w-10 place-items-center rounded-xl border border-cyan-400/20 bg-cyan-400/10 text-cyan-300 shadow-[0_0_24px_rgba(34,211,238,0.12)]">
@@ -1169,6 +1561,8 @@ export default function Home() {
                 gain={oscillator.gain}
                 waveform={oscillator.waveform}
                 pan={oscillator.pan}
+                muted={oscillator.muted}
+                soloed={oscillator.soloed}
                 tremoloEnabled={oscillator.tremoloEnabled}
                 tremoloRate={oscillator.tremoloRate}
                 tremoloDepth={oscillator.tremoloDepth}
@@ -1176,6 +1570,8 @@ export default function Home() {
                 onGainChange={(gain) => handleGainChange(index, gain)}
                 onWaveformChange={(waveform) => handleWaveformChange(index, waveform)}
                 onPanChange={(pan) => handlePanChange(index, pan)}
+                onMuteToggle={(muted) => handleMuteToggle(index, muted)}
+                onSoloToggle={(soloed) => handleSoloToggle(index, soloed)}
                 onTremoloToggle={(enabled) => handleTremoloToggle(index, enabled)}
                 onTremoloRateChange={(rate) => handleTremoloRateChange(index, rate)}
                 onTremoloDepthChange={(depth) => handleTremoloDepthChange(index, depth)}
@@ -1237,7 +1633,7 @@ export default function Home() {
                 return (
                   <div
                     key={preset.id}
-                    className="group studio-card flex min-h-[106px] items-center justify-between gap-3 rounded-xl p-3"
+                    className="group studio-card flex min-h-[150px] items-center justify-between gap-3 rounded-xl p-3"
                   >
                     <PresetArtwork name={preset.name} />
                     <div className="min-w-0 flex-1">
@@ -1248,8 +1644,36 @@ export default function Home() {
                             Built-in
                           </span>
                         )}
+                        {preset.headphonesRecommended && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-full border border-violet-400/30 bg-violet-400/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-violet-200"
+                            title={preset.caution}
+                          >
+                            <Headphones size={10} />
+                            Phones
+                          </span>
+                        )}
                       </div>
-                      <p className="text-xs text-slate-500">{new Date(preset.createdAt).toLocaleDateString()}</p>
+                      <p className="mt-1 text-xs font-medium text-cyan-300">{preset.intendedUse}</p>
+                      <p
+                        className="mt-1 overflow-hidden text-xs leading-4 text-slate-500 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]"
+                        title={preset.caution}
+                      >
+                        {preset.description}
+                      </p>
+                      {preset.tags.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {preset.tags.slice(0, 3).map((tag) => (
+                            <span
+                              key={tag}
+                              className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-slate-400"
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <p className="mt-1 text-xs text-slate-600">{new Date(preset.createdAt).toLocaleDateString()}</p>
                     </div>
                     <div className="flex shrink-0 gap-2">
                       <button

@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { formatFrequency, logFrequencyToLinear } from '@/utils/audioMath';
+import { formatFrequency, logFrequencyToLinear, nudgeFrequency } from '@/utils/audioMath';
 import { clamp } from '@/utils/math';
 import type { WaveformType } from '@/lib/audioEngine';
 
@@ -11,6 +11,8 @@ interface OscillatorPanelProps {
   gain: number;
   waveform: WaveformType;
   pan: number;
+  muted: boolean;
+  soloed: boolean;
   tremoloEnabled: boolean;
   tremoloRate: number;
   tremoloDepth: number;
@@ -18,6 +20,8 @@ interface OscillatorPanelProps {
   onGainChange: (gain: number) => void;
   onWaveformChange: (waveform: WaveformType) => void;
   onPanChange: (pan: number) => void;
+  onMuteToggle: (muted: boolean) => void;
+  onSoloToggle: (soloed: boolean) => void;
   onTremoloToggle: (enabled: boolean) => void;
   onTremoloRateChange: (rate: number) => void;
   onTremoloDepthChange: (depth: number) => void;
@@ -28,6 +32,13 @@ const WAVEFORMS: Array<{ value: WaveformType; label: string; title: string }> = 
   { value: 'square', label: 'Sq', title: 'Square' },
   { value: 'sawtooth', label: 'Sa', title: 'Sawtooth' },
   { value: 'triangle', label: 'Tr', title: 'Triangle' },
+];
+
+const FREQUENCY_NUDGES = [
+  { label: '-10', deltaHz: -10, title: 'Coarse down 10 Hz' },
+  { label: '-1', deltaHz: -1, title: 'Fine down 1 Hz' },
+  { label: '+1', deltaHz: 1, title: 'Fine up 1 Hz' },
+  { label: '+10', deltaHz: 10, title: 'Coarse up 10 Hz' },
 ];
 
 const numberInputClass =
@@ -46,6 +57,8 @@ export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
   gain,
   waveform,
   pan,
+  muted,
+  soloed,
   tremoloEnabled,
   tremoloRate,
   tremoloDepth,
@@ -53,6 +66,8 @@ export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
   onGainChange,
   onWaveformChange,
   onPanChange,
+  onMuteToggle,
+  onSoloToggle,
   onTremoloToggle,
   onTremoloRateChange,
   onTremoloDepthChange,
@@ -69,6 +84,10 @@ export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
     onFrequencyChange(logFrequencyToLinear(clamp(parsedValue, 20, 20000), 20, 20000));
   };
 
+  const handleFrequencyNudge = (deltaHz: number) => {
+    onFrequencyChange(logFrequencyToLinear(nudgeFrequency(frequency, deltaHz), 20, 20000));
+  };
+
   const handlePercentChange = (
     value: string,
     onChange: (nextValue: number) => void
@@ -80,31 +99,65 @@ export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
   };
 
   return (
-    <div className={`studio-card relative flex h-full min-h-[360px] flex-col overflow-hidden rounded-2xl border ${color.border} p-3.5 shadow-lg ${color.glow}`}>
+    <div className={`studio-card relative flex h-full min-h-[360px] flex-col overflow-hidden rounded-2xl border ${color.border} p-3.5 shadow-lg ${color.glow} ${muted ? 'opacity-75' : ''}`}>
       <div className={`absolute inset-x-0 top-0 h-px bg-gradient-to-r ${color.top} via-white/30 to-transparent`} />
       <div className="mb-3.5 flex items-start justify-between gap-3">
         <div>
           <p className={`text-[11px] font-semibold uppercase tracking-[0.16em] ${color.accent}`}>
             Oscillator {index + 1}
           </p>
-          <p className="mt-1 font-mono text-[13px] text-slate-400">{formatFrequency(frequency)}</p>
+          <p className="mt-1 font-mono text-[13px] text-slate-400">
+            {muted ? 'Muted' : soloed ? 'Solo' : formatFrequency(frequency)}
+          </p>
         </div>
-        <div className="flex shrink-0 gap-1">
-          {WAVEFORMS.map((option) => (
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
+          <div className="flex gap-1">
             <button
-              key={option.value}
-              onClick={() => onWaveformChange(option.value)}
+              type="button"
+              onClick={() => onMuteToggle(!muted)}
+              aria-pressed={muted}
+              aria-label={`${muted ? 'Unmute' : 'Mute'} oscillator ${index + 1}`}
+              title={`${muted ? 'Unmute' : 'Mute'} oscillator ${index + 1}`}
               className={`grid h-7 min-w-8 place-items-center rounded-lg px-2 text-[11px] font-semibold transition-all ${
-                waveform === option.value
+                muted
+                  ? 'bg-red-500/80 text-white shadow-[0_8px_22px_rgba(248,113,113,0.18)]'
+                  : 'bg-white/[0.04] text-slate-400 hover:bg-white/[0.08] hover:text-slate-200'
+              }`}
+            >
+              M
+            </button>
+            <button
+              type="button"
+              onClick={() => onSoloToggle(!soloed)}
+              aria-pressed={soloed}
+              aria-label={`${soloed ? 'Unsolo' : 'Solo'} oscillator ${index + 1}`}
+              title={`${soloed ? 'Unsolo' : 'Solo'} oscillator ${index + 1}`}
+              className={`grid h-7 min-w-8 place-items-center rounded-lg px-2 text-[11px] font-semibold transition-all ${
+                soloed
                   ? `bg-gradient-to-r ${color.primary} text-white shadow-[0_8px_22px_rgba(34,211,238,0.12)]`
                   : 'bg-white/[0.04] text-slate-400 hover:bg-white/[0.08] hover:text-slate-200'
               }`}
-              title={option.title}
-              aria-label={`Set oscillator ${index + 1} waveform to ${option.title}`}
             >
-              {option.label}
+              S
             </button>
-          ))}
+          </div>
+          <div className="flex gap-1">
+            {WAVEFORMS.map((option) => (
+              <button
+                key={option.value}
+                onClick={() => onWaveformChange(option.value)}
+                className={`grid h-7 min-w-8 place-items-center rounded-lg px-2 text-[11px] font-semibold transition-all ${
+                  waveform === option.value
+                    ? `bg-gradient-to-r ${color.primary} text-white shadow-[0_8px_22px_rgba(34,211,238,0.12)]`
+                    : 'bg-white/[0.04] text-slate-400 hover:bg-white/[0.08] hover:text-slate-200'
+                }`}
+                title={option.title}
+                aria-label={`Set oscillator ${index + 1} waveform to ${option.title}`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -132,6 +185,20 @@ export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
           className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-slate-700"
           aria-label={`Oscillator ${index + 1} frequency slider`}
         />
+        <div className="grid grid-cols-4 gap-1.5">
+          {FREQUENCY_NUDGES.map((nudge) => (
+            <button
+              key={nudge.label}
+              type="button"
+              onClick={() => handleFrequencyNudge(nudge.deltaHz)}
+              title={`${nudge.title} for oscillator ${index + 1}`}
+              aria-label={`${nudge.title} for oscillator ${index + 1}`}
+              className="h-7 rounded-lg border border-white/10 bg-white/[0.04] font-mono text-[11px] text-slate-300 transition hover:border-cyan-400/35 hover:bg-cyan-400/10 hover:text-cyan-200"
+            >
+              {nudge.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="mb-3 space-y-2">

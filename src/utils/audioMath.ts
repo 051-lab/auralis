@@ -41,3 +41,56 @@ export function formatFrequency(freq: number): string {
   }
   return `${freq.toFixed(2)} Hz`;
 }
+
+export function clampFrequency(
+  frequency: number,
+  minFreq: number = 20,
+  maxFreq: number = 20000
+): number {
+  if (!Number.isFinite(frequency)) return minFreq;
+
+  return Math.max(minFreq, Math.min(maxFreq, frequency));
+}
+
+export function nudgeFrequency(
+  frequency: number,
+  deltaHz: number,
+  minFreq: number = 20,
+  maxFreq: number = 20000
+): number {
+  return clampFrequency(frequency + deltaHz, minFreq, maxFreq);
+}
+
+export function centsToFrequencyRatio(cents: number): number {
+  if (!Number.isFinite(cents)) return 1;
+
+  return Math.pow(2, cents / 1200);
+}
+
+export function applyCentsDetune(
+  frequency: number,
+  cents: number,
+  minFreq: number = 20,
+  maxFreq: number = 20000
+): number {
+  return clampFrequency(frequency * centsToFrequencyRatio(cents), minFreq, maxFreq);
+}
+
+export function frequencyRatioToCents(ratio: number): number {
+  if (!Number.isFinite(ratio) || ratio <= 0) return 0;
+
+  return 1200 * Math.log2(ratio);
+}
+
+export function getCentsDifference(frequency: number, referenceFrequency: number): number {
+  if (
+    !Number.isFinite(frequency) ||
+    !Number.isFinite(referenceFrequency) ||
+    frequency <= 0 ||
+    referenceFrequency <= 0
+  ) {
+    return 0;
+  }
+
+  return frequencyRatioToCents(frequency / referenceFrequency);
+}

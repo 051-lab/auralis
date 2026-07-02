@@ -76,6 +76,18 @@ npm run start    # Run the production build
 npm run lint     # Run Next.js linting
 ```
 
+## Audio research docs
+
+The audio-side planning docs live in `docs/audio/`:
+
+- [Audio Architecture Audit](docs/audio/AUDIO_ARCHITECTURE_AUDIT.md)
+- [Reading Roadmap](docs/audio/READING_ROADMAP.md)
+- [Audio Improvement Backlog](docs/audio/AUDIO_IMPROVEMENT_BACKLOG.md)
+- [Preset Design Guide](docs/audio/PRESET_DESIGN_GUIDE.md)
+- [Responsible Audio Guidelines](docs/audio/RESPONSIBLE_AUDIO_GUIDELINES.md)
+- [Browser Audio Compatibility Checklist](docs/audio/BROWSER_AUDIO_COMPATIBILITY_CHECKLIST.md)
+- [Next Audio Engine Tasks](docs/audio/NEXT_AUDIO_ENGINE_TASKS.md)
+
 ## Environment variables
 
 Auralis ships with `.env.example`:

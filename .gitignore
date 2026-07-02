@@ -5,6 +5,11 @@
 
 # Compressed files
 *.tar.gz
+*.zip
+
+# Local handoff/knowledge assets
+CHATGPT_UI_HANDOFF.md
+knowledge/pdfs/*.pdf
 
 # Dependencies
 node_modules/
