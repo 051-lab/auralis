@@ -1,26 +1,78 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { NoiseType, WaveformType } from '../lib/audioEngine';
+import type {
+  ModulationMode,
+  ModulationTargets,
+  NoiseType,
+  TextureType,
+  WaveformType,
+} from '../lib/audioEngine';
 import { clampUnknown } from '@/utils/math';
 
 export interface OscillatorState {
   frequency: number;
+  detuneCents: number;
   gain: number;
   waveform: WaveformType;
   pan: number;
+  phaseDegrees: number;
   muted: boolean;
   soloed: boolean;
   tremoloEnabled: boolean;
+  tremoloShape: WaveformType;
   tremoloRate: number;
   tremoloDepth: number;
+  attackSeconds: number;
+  releaseSeconds: number;
 }
 
 export interface MasterFXState {
   masterVolume: number;
+  limiterThresholdDb: number;
   reverbWet: number;
   reverbDecay: number;
+  reverbPreDelay: number;
   autoPannerRate: number;
   autoPannerDepth: number;
+  eqEnabled: boolean;
+  eqLowGain: number;
+  eqMidGain: number;
+  eqHighGain: number;
+  stereoWidth: number;
+  delayEnabled: boolean;
+  delayWet: number;
+  delayTime: number;
+  delayFeedback: number;
+  chorusEnabled: boolean;
+  chorusWet: number;
+  chorusRate: number;
+  chorusDepth: number;
+}
+
+export interface ModulationState {
+  mode: ModulationMode;
+  rate: number;
+  depth: number;
+  targets: ModulationTargets;
+}
+
+export interface TextureLayerState {
+  enabled: boolean;
+  type: TextureType;
+  gain: number;
+  tone: number;
+  width: number;
+  motion: number;
+}
+
+export interface CreatorSessionState {
+  title: string;
+  purpose: string;
+  notes: string;
+  visualTheme: string;
+  storyboardNotes: string;
+  durationMinutes: number;
+  exportSlug: string;
 }
 
 export interface SharedPresetPayload {
@@ -29,6 +81,7 @@ export interface SharedPresetPayload {
   description?: string;
   intendedUse?: string;
   headphonesRecommended?: boolean;
+  exportReady?: boolean;
   caution?: string;
   tags?: string[];
   oscillators?: Partial<OscillatorState>[];
@@ -39,6 +92,9 @@ export interface SharedPresetPayload {
   noiseHighpassFrequency?: number;
   noiseLowpassFrequency?: number;
   noiseStereoWidth?: number;
+  modulation?: Partial<ModulationState>;
+  textureLayer?: Partial<TextureLayerState>;
+  creatorSession?: Partial<CreatorSessionState>;
   isBinauralMode?: boolean;
   binauralPreset?: string | null;
   createdAt?: number;
@@ -51,6 +107,7 @@ export interface Preset {
   description: string;
   intendedUse: string;
   headphonesRecommended: boolean;
+  exportReady: boolean;
   caution: string;
   tags: string[];
   oscillators: OscillatorState[];
@@ -61,6 +118,9 @@ export interface Preset {
   noiseHighpassFrequency: number;
   noiseLowpassFrequency: number;
   noiseStereoWidth: number;
+  modulation: ModulationState;
+  textureLayer: TextureLayerState;
+  creatorSession: CreatorSessionState;
   createdAt: number;
 }
 
@@ -79,21 +139,41 @@ interface AuralisState {
   noiseHighpassFrequency: number;
   noiseLowpassFrequency: number;
   noiseStereoWidth: number;
+  modulation: ModulationState;
+  textureLayer: TextureLayerState;
+  creatorSession: CreatorSessionState;
 
   setOscillatorFrequency: (index: number, freq: number) => void;
+  setOscillatorDetune: (index: number, detuneCents: number) => void;
   setOscillatorGain: (index: number, gain: number) => void;
   setOscillatorWaveform: (index: number, waveform: WaveformType) => void;
   setOscillatorPan: (index: number, pan: number) => void;
+  setOscillatorPhase: (index: number, phaseDegrees: number) => void;
   setOscillatorMuted: (index: number, muted: boolean) => void;
   setOscillatorSoloed: (index: number, soloed: boolean) => void;
   setOscillatorTremoloEnabled: (index: number, enabled: boolean) => void;
+  setOscillatorTremoloShape: (index: number, shape: WaveformType) => void;
   setOscillatorTremoloRate: (index: number, rate: number) => void;
   setOscillatorTremoloDepth: (index: number, depth: number) => void;
+  setOscillatorEnvelope: (index: number, attackSeconds: number, releaseSeconds: number) => void;
   setMasterVolume: (volume: number) => void;
+  setLimiterThreshold: (thresholdDb: number) => void;
   setReverbWet: (wet: number) => void;
   setReverbDecay: (decay: number) => void;
+  setReverbPreDelay: (preDelay: number) => void;
   setAutoPannerRate: (rate: number) => void;
   setAutoPannerDepth: (depth: number) => void;
+  setEqEnabled: (enabled: boolean) => void;
+  setEqGain: (band: 'low' | 'mid' | 'high', gain: number) => void;
+  setStereoWidth: (width: number) => void;
+  setDelayEnabled: (enabled: boolean) => void;
+  setDelayWet: (wet: number) => void;
+  setDelayTime: (time: number) => void;
+  setDelayFeedback: (feedback: number) => void;
+  setChorusEnabled: (enabled: boolean) => void;
+  setChorusWet: (wet: number) => void;
+  setChorusRate: (rate: number) => void;
+  setChorusDepth: (depth: number) => void;
   setBinauralMode: (enabled: boolean, presetName?: string | null) => void;
   setTimerDuration: (duration: number | null) => void;
   setTimerRemaining: (remaining: number | null) => void;
@@ -104,6 +184,17 @@ interface AuralisState {
   setNoiseHighpassFrequency: (frequency: number) => void;
   setNoiseLowpassFrequency: (frequency: number) => void;
   setNoiseStereoWidth: (width: number) => void;
+  setModulationMode: (mode: ModulationMode) => void;
+  setModulationRate: (rate: number) => void;
+  setModulationDepth: (depth: number) => void;
+  setModulationTarget: (target: keyof ModulationTargets, enabled: boolean) => void;
+  setTextureLayerEnabled: (enabled: boolean) => void;
+  setTextureLayerType: (type: TextureType) => void;
+  setTextureLayerGain: (gain: number) => void;
+  setTextureLayerTone: (tone: number) => void;
+  setTextureLayerWidth: (width: number) => void;
+  setTextureLayerMotion: (motion: number) => void;
+  setCreatorSessionField: (field: keyof CreatorSessionState, value: string | number) => void;
   savePreset: (name: string) => void;
   loadPreset: (id: string) => void;
   deletePreset: (id: string) => void;
@@ -111,7 +202,7 @@ interface AuralisState {
   resetToDefaults: () => void;
 }
 
-export const CURRENT_PRESET_VERSION = 1;
+export const CURRENT_PRESET_VERSION = 2;
 const MAX_USER_PRESETS = 50;
 const MAX_PRESET_NAME_LENGTH = 80;
 const MAX_PRESET_DESCRIPTION_LENGTH = 180;
@@ -119,6 +210,12 @@ const MAX_PRESET_INTENDED_USE_LENGTH = 48;
 const MAX_PRESET_CAUTION_LENGTH = 160;
 const MAX_PRESET_TAG_LENGTH = 24;
 const MAX_PRESET_TAGS = 5;
+const MAX_CREATOR_TITLE_LENGTH = 96;
+const MAX_CREATOR_PURPOSE_LENGTH = 80;
+const MAX_CREATOR_NOTES_LENGTH = 320;
+const MAX_CREATOR_VISUAL_THEME_LENGTH = 120;
+const MAX_CREATOR_STORYBOARD_NOTES_LENGTH = 420;
+const MAX_CREATOR_EXPORT_SLUG_LENGTH = 96;
 
 const clamp = clampUnknown;
 
@@ -130,59 +227,114 @@ const isNoiseType = (value: unknown): value is NoiseType => {
   return value === 'white' || value === 'pink' || value === 'brown';
 };
 
+const isModulationMode = (value: unknown): value is ModulationMode => {
+  return (
+    value === 'off' ||
+    value === 'gentle' ||
+    value === 'breathing' ||
+    value === 'pulse' ||
+    value === 'drift'
+  );
+};
+
+const isTextureType = (value: unknown): value is TextureType => {
+  return (
+    value === 'rain' ||
+    value === 'storm' ||
+    value === 'wind' ||
+    value === 'ocean' ||
+    value === 'drone'
+  );
+};
+
 const defaultOscillators: OscillatorState[] = [
   {
     frequency: 200,
+    detuneCents: 0,
     gain: 0.35,
     waveform: 'sine',
     pan: 0,
+    phaseDegrees: 0,
     muted: false,
     soloed: false,
     tremoloEnabled: false,
+    tremoloShape: 'sine',
     tremoloRate: 2,
     tremoloDepth: 0.3,
+    attackSeconds: 0.02,
+    releaseSeconds: 0.2,
   },
   {
     frequency: 300,
+    detuneCents: 0,
     gain: 0.35,
     waveform: 'sine',
     pan: 0,
+    phaseDegrees: 0,
     muted: false,
     soloed: false,
     tremoloEnabled: false,
+    tremoloShape: 'sine',
     tremoloRate: 2.5,
     tremoloDepth: 0.3,
+    attackSeconds: 0.02,
+    releaseSeconds: 0.2,
   },
   {
     frequency: 400,
+    detuneCents: 0,
     gain: 0.35,
     waveform: 'sine',
     pan: 0,
+    phaseDegrees: 0,
     muted: false,
     soloed: false,
     tremoloEnabled: false,
+    tremoloShape: 'sine',
     tremoloRate: 3,
     tremoloDepth: 0.3,
+    attackSeconds: 0.02,
+    releaseSeconds: 0.2,
   },
   {
     frequency: 500,
+    detuneCents: 0,
     gain: 0.35,
     waveform: 'sine',
     pan: 0,
+    phaseDegrees: 0,
     muted: false,
     soloed: false,
     tremoloEnabled: false,
+    tremoloShape: 'sine',
     tremoloRate: 3.5,
     tremoloDepth: 0.3,
+    attackSeconds: 0.02,
+    releaseSeconds: 0.2,
   },
 ];
 
 const defaultMasterFX: MasterFXState = {
   masterVolume: 0.6,
+  limiterThresholdDb: -1,
   reverbWet: 0.3,
   reverbDecay: 6,
+  reverbPreDelay: 0.01,
   autoPannerRate: 0.2,
   autoPannerDepth: 0.5,
+  eqEnabled: false,
+  eqLowGain: 0,
+  eqMidGain: 0,
+  eqHighGain: 0,
+  stereoWidth: 0.5,
+  delayEnabled: false,
+  delayWet: 0,
+  delayTime: 0.25,
+  delayFeedback: 0.2,
+  chorusEnabled: false,
+  chorusWet: 0,
+  chorusRate: 0.8,
+  chorusDepth: 0.2,
 };
 
 const defaultNoiseEnabled = false;
@@ -195,6 +347,33 @@ const defaultNoiseFilter = {
   noiseHighpassFrequency: defaultNoiseHighpassFrequency,
   noiseLowpassFrequency: defaultNoiseLowpassFrequency,
   noiseStereoWidth: defaultNoiseStereoWidth,
+};
+const defaultModulation: ModulationState = {
+  mode: 'off',
+  rate: 0.08,
+  depth: 0.25,
+  targets: {
+    noiseFilter: true,
+    noiseWidth: true,
+    oscillatorPan: false,
+  },
+};
+const defaultTextureLayer: TextureLayerState = {
+  enabled: false,
+  type: 'rain',
+  gain: 0.12,
+  tone: 0.5,
+  width: 0.7,
+  motion: 0.2,
+};
+const defaultCreatorSession: CreatorSessionState = {
+  title: '',
+  purpose: 'Relaxation sound session',
+  notes: '',
+  visualTheme: 'Dark cyan/violet audio visualizer',
+  storyboardNotes: '',
+  durationMinutes: 30,
+  exportSlug: '',
 };
 const builtInPresetCreatedAt = Date.UTC(2026, 5, 29, 12);
 const defaultPresetDescription = 'Custom sound session saved from the current Auralis settings.';
@@ -214,14 +393,19 @@ const createOscillator = (
   waveform: WaveformType = 'sine'
 ): OscillatorState => ({
   frequency,
+  detuneCents: 0,
   gain,
   waveform,
   pan,
+  phaseDegrees: 0,
   muted: false,
   soloed: false,
   tremoloEnabled: false,
+  tremoloShape: 'sine',
   tremoloRate: 2,
   tremoloDepth: 0.3,
+  attackSeconds: 0.02,
+  releaseSeconds: 0.2,
 });
 
 const createPresetMetadata = (
@@ -229,13 +413,49 @@ const createPresetMetadata = (
   intendedUse: string,
   tags: string[],
   headphonesRecommended: boolean = false,
-  caution: string = defaultPresetCaution
+  caution: string = defaultPresetCaution,
+  exportReady: boolean = true
 ) => ({
   description,
   intendedUse,
   headphonesRecommended,
+  exportReady,
   caution,
   tags,
+});
+
+const cloneModulation = (modulation: ModulationState = defaultModulation): ModulationState => ({
+  ...modulation,
+  targets: { ...modulation.targets },
+});
+
+const cloneTextureLayer = (
+  textureLayer: TextureLayerState = defaultTextureLayer
+): TextureLayerState => ({
+  ...textureLayer,
+});
+
+const cloneCreatorSession = (
+  creatorSession: CreatorSessionState = defaultCreatorSession
+): CreatorSessionState => ({
+  ...creatorSession,
+});
+
+const createPresetExtension = (
+  title: string,
+  options: {
+    modulation?: ModulationState;
+    textureLayer?: TextureLayerState;
+    creatorSession?: Partial<CreatorSessionState>;
+  } = {}
+) => ({
+  modulation: cloneModulation(options.modulation),
+  textureLayer: cloneTextureLayer(options.textureLayer),
+  creatorSession: {
+    ...cloneCreatorSession(defaultCreatorSession),
+    ...options.creatorSession,
+    title,
+  },
 });
 
 const builtInPresets: Preset[] = [
@@ -257,6 +477,7 @@ const builtInPresets: Preset[] = [
       createOscillator(500, 0, 0),
     ],
     masterFX: {
+      ...defaultMasterFX,
       masterVolume: 0.6,
       reverbWet: 0.1,
       reverbDecay: 6,
@@ -267,6 +488,7 @@ const builtInPresets: Preset[] = [
     noiseType: 'brown',
     noiseGain: 0.1,
     ...defaultNoiseFilter,
+    ...createPresetExtension('Gamma Neural Binding (40Hz)'),
     createdAt: builtInPresetCreatedAt,
   },
   {
@@ -287,6 +509,7 @@ const builtInPresets: Preset[] = [
       createOscillator(500, 0, 0),
     ],
     masterFX: {
+      ...defaultMasterFX,
       masterVolume: 0.55,
       reverbWet: 0.12,
       reverbDecay: 5,
@@ -297,6 +520,7 @@ const builtInPresets: Preset[] = [
     noiseType: 'brown',
     noiseGain: 0.08,
     ...defaultNoiseFilter,
+    ...createPresetExtension('Alpha Relaxed Focus (10Hz)'),
     createdAt: builtInPresetCreatedAt,
   },
   {
@@ -317,6 +541,7 @@ const builtInPresets: Preset[] = [
       createOscillator(500, 0, 0),
     ],
     masterFX: {
+      ...defaultMasterFX,
       masterVolume: 0.52,
       reverbWet: 0.16,
       reverbDecay: 7,
@@ -327,6 +552,7 @@ const builtInPresets: Preset[] = [
     noiseType: 'pink',
     noiseGain: 0.12,
     ...defaultNoiseFilter,
+    ...createPresetExtension('Theta Meditation Gate (6Hz)'),
     createdAt: builtInPresetCreatedAt,
   },
   {
@@ -347,6 +573,7 @@ const builtInPresets: Preset[] = [
       createOscillator(500, 0, 0),
     ],
     masterFX: {
+      ...defaultMasterFX,
       masterVolume: 0.5,
       reverbWet: 0.18,
       reverbDecay: 8,
@@ -359,6 +586,7 @@ const builtInPresets: Preset[] = [
     noiseHighpassFrequency: 30,
     noiseLowpassFrequency: 5200,
     noiseStereoWidth: 0.35,
+    ...createPresetExtension('Delta Sleep Descent (2Hz)'),
     createdAt: builtInPresetCreatedAt,
   },
   {
@@ -379,6 +607,7 @@ const builtInPresets: Preset[] = [
       createOscillator(348, 0.04, 0, 'sine'),
     ],
     masterFX: {
+      ...defaultMasterFX,
       masterVolume: 0.46,
       reverbWet: 0.2,
       reverbDecay: 8,
@@ -391,6 +620,22 @@ const builtInPresets: Preset[] = [
     noiseHighpassFrequency: 35,
     noiseLowpassFrequency: 4800,
     noiseStereoWidth: 0.35,
+    ...createPresetExtension('Soft Evening Unwind (4Hz)', {
+      modulation: {
+        mode: 'breathing',
+        rate: 0.05,
+        depth: 0.18,
+        targets: { noiseFilter: true, noiseWidth: true, oscillatorPan: false },
+      },
+      textureLayer: {
+        enabled: true,
+        type: 'ocean',
+        gain: 0.07,
+        tone: 0.35,
+        width: 0.55,
+        motion: 0.35,
+      },
+    }),
     createdAt: builtInPresetCreatedAt,
   },
   {
@@ -411,6 +656,7 @@ const builtInPresets: Preset[] = [
       createOscillator(98, 0.08, 0, 'sine'),
     ],
     masterFX: {
+      ...defaultMasterFX,
       masterVolume: 0.48,
       reverbWet: 0.18,
       reverbDecay: 7,
@@ -423,6 +669,22 @@ const builtInPresets: Preset[] = [
     noiseHighpassFrequency: 45,
     noiseLowpassFrequency: 6400,
     noiseStereoWidth: 0.45,
+    ...createPresetExtension('Calm Breathing Bed (6Hz)', {
+      modulation: {
+        mode: 'breathing',
+        rate: 0.07,
+        depth: 0.16,
+        targets: { noiseFilter: true, noiseWidth: true, oscillatorPan: false },
+      },
+      textureLayer: {
+        enabled: true,
+        type: 'wind',
+        gain: 0.06,
+        tone: 0.45,
+        width: 0.6,
+        motion: 0.28,
+      },
+    }),
     createdAt: builtInPresetCreatedAt,
   },
   {
@@ -443,6 +705,7 @@ const builtInPresets: Preset[] = [
       createOscillator(315, 0.04, 0, 'sine'),
     ],
     masterFX: {
+      ...defaultMasterFX,
       masterVolume: 0.5,
       reverbWet: 0.14,
       reverbDecay: 5.5,
@@ -455,6 +718,7 @@ const builtInPresets: Preset[] = [
     noiseHighpassFrequency: 40,
     noiseLowpassFrequency: 7600,
     noiseStereoWidth: 0.35,
+    ...createPresetExtension('Alpha Lantern (10Hz)'),
     createdAt: builtInPresetCreatedAt,
   },
   {
@@ -473,6 +737,7 @@ const builtInPresets: Preset[] = [
       createOscillator(288, 0.05, 0, 'triangle'),
     ],
     masterFX: {
+      ...defaultMasterFX,
       masterVolume: 0.44,
       reverbWet: 0.24,
       reverbDecay: 9,
@@ -485,6 +750,22 @@ const builtInPresets: Preset[] = [
     noiseHighpassFrequency: 28,
     noiseLowpassFrequency: 4200,
     noiseStereoWidth: 0.65,
+    ...createPresetExtension('Deep Drone Horizon', {
+      modulation: {
+        mode: 'drift',
+        rate: 0.04,
+        depth: 0.2,
+        targets: { noiseFilter: true, noiseWidth: true, oscillatorPan: true },
+      },
+      textureLayer: {
+        enabled: true,
+        type: 'drone',
+        gain: 0.1,
+        tone: 0.3,
+        width: 0.5,
+        motion: 0.18,
+      },
+    }),
     createdAt: builtInPresetCreatedAt,
   },
   {
@@ -503,6 +784,7 @@ const builtInPresets: Preset[] = [
       createOscillator(500, 0, 0),
     ],
     masterFX: {
+      ...defaultMasterFX,
       masterVolume: 0.42,
       reverbWet: 0.12,
       reverbDecay: 6.5,
@@ -515,6 +797,22 @@ const builtInPresets: Preset[] = [
     noiseHighpassFrequency: 60,
     noiseLowpassFrequency: 3600,
     noiseStereoWidth: 0.7,
+    ...createPresetExtension('Soft Noise Cocoon', {
+      modulation: {
+        mode: 'gentle',
+        rate: 0.06,
+        depth: 0.22,
+        targets: { noiseFilter: true, noiseWidth: true, oscillatorPan: false },
+      },
+      textureLayer: {
+        enabled: true,
+        type: 'rain',
+        gain: 0.08,
+        tone: 0.42,
+        width: 0.75,
+        motion: 0.25,
+      },
+    }),
     createdAt: builtInPresetCreatedAt,
   },
 ];
@@ -549,17 +847,29 @@ export const normalizeOscillators = (
 
     return {
       frequency: clamp(incoming.frequency, 20, 20000, defaultOscillator.frequency),
+      detuneCents: clamp(incoming.detuneCents, -1200, 1200, defaultOscillator.detuneCents),
       gain: clamp(incoming.gain, 0, 1, defaultOscillator.gain),
       waveform: isWaveformType(incoming.waveform) ? incoming.waveform : defaultOscillator.waveform,
       pan: clamp(incoming.pan, -1, 1, defaultOscillator.pan),
+      phaseDegrees: clamp(incoming.phaseDegrees, 0, 360, defaultOscillator.phaseDegrees),
       muted: typeof incoming.muted === 'boolean' ? incoming.muted : defaultOscillator.muted,
       soloed: typeof incoming.soloed === 'boolean' ? incoming.soloed : defaultOscillator.soloed,
       tremoloEnabled:
         typeof incoming.tremoloEnabled === 'boolean'
           ? incoming.tremoloEnabled
           : defaultOscillator.tremoloEnabled,
+      tremoloShape: isWaveformType(incoming.tremoloShape)
+        ? incoming.tremoloShape
+        : defaultOscillator.tremoloShape,
       tremoloRate: clamp(incoming.tremoloRate, 0.1, 30, defaultOscillator.tremoloRate),
       tremoloDepth: clamp(incoming.tremoloDepth, 0, 1, defaultOscillator.tremoloDepth),
+      attackSeconds: clamp(incoming.attackSeconds, 0.001, 5, defaultOscillator.attackSeconds),
+      releaseSeconds: clamp(
+        incoming.releaseSeconds,
+        0.01,
+        10,
+        defaultOscillator.releaseSeconds
+      ),
     };
   });
 };
@@ -567,8 +877,20 @@ export const normalizeOscillators = (
 export const normalizeMasterFX = (incomingMasterFX?: Partial<MasterFXState>): MasterFXState => {
   return {
     masterVolume: clamp(incomingMasterFX?.masterVolume, 0, 1, defaultMasterFX.masterVolume),
+    limiterThresholdDb: clamp(
+      incomingMasterFX?.limiterThresholdDb,
+      -12,
+      -0.1,
+      defaultMasterFX.limiterThresholdDb
+    ),
     reverbWet: clamp(incomingMasterFX?.reverbWet, 0, 1, defaultMasterFX.reverbWet),
     reverbDecay: clamp(incomingMasterFX?.reverbDecay, 0.2, 12, defaultMasterFX.reverbDecay),
+    reverbPreDelay: clamp(
+      incomingMasterFX?.reverbPreDelay,
+      0,
+      0.5,
+      defaultMasterFX.reverbPreDelay
+    ),
     autoPannerRate: clamp(
       incomingMasterFX?.autoPannerRate,
       0,
@@ -581,6 +903,28 @@ export const normalizeMasterFX = (incomingMasterFX?: Partial<MasterFXState>): Ma
       1,
       defaultMasterFX.autoPannerDepth
     ),
+    eqEnabled:
+      typeof incomingMasterFX?.eqEnabled === 'boolean'
+        ? incomingMasterFX.eqEnabled
+        : defaultMasterFX.eqEnabled,
+    eqLowGain: clamp(incomingMasterFX?.eqLowGain, -12, 12, defaultMasterFX.eqLowGain),
+    eqMidGain: clamp(incomingMasterFX?.eqMidGain, -12, 12, defaultMasterFX.eqMidGain),
+    eqHighGain: clamp(incomingMasterFX?.eqHighGain, -12, 12, defaultMasterFX.eqHighGain),
+    stereoWidth: clamp(incomingMasterFX?.stereoWidth, 0, 1, defaultMasterFX.stereoWidth),
+    delayEnabled:
+      typeof incomingMasterFX?.delayEnabled === 'boolean'
+        ? incomingMasterFX.delayEnabled
+        : defaultMasterFX.delayEnabled,
+    delayWet: clamp(incomingMasterFX?.delayWet, 0, 1, defaultMasterFX.delayWet),
+    delayTime: clamp(incomingMasterFX?.delayTime, 0.01, 1, defaultMasterFX.delayTime),
+    delayFeedback: clamp(incomingMasterFX?.delayFeedback, 0, 0.9, defaultMasterFX.delayFeedback),
+    chorusEnabled:
+      typeof incomingMasterFX?.chorusEnabled === 'boolean'
+        ? incomingMasterFX.chorusEnabled
+        : defaultMasterFX.chorusEnabled,
+    chorusWet: clamp(incomingMasterFX?.chorusWet, 0, 1, defaultMasterFX.chorusWet),
+    chorusRate: clamp(incomingMasterFX?.chorusRate, 0.05, 8, defaultMasterFX.chorusRate),
+    chorusDepth: clamp(incomingMasterFX?.chorusDepth, 0, 1, defaultMasterFX.chorusDepth),
   };
 };
 
@@ -594,6 +938,95 @@ export const normalizeNoiseLowpassFrequency = (frequency: unknown): number => {
 
 export const normalizeNoiseStereoWidth = (width: unknown): number => {
   return clamp(width, 0, 1, defaultNoiseStereoWidth);
+};
+
+export const normalizeModulation = (
+  incomingModulation?: Partial<ModulationState>
+): ModulationState => {
+  const incomingTargets = incomingModulation?.targets;
+
+  return {
+    mode: isModulationMode(incomingModulation?.mode)
+      ? incomingModulation.mode
+      : defaultModulation.mode,
+    rate: clamp(incomingModulation?.rate, 0.01, 1, defaultModulation.rate),
+    depth: clamp(incomingModulation?.depth, 0, 1, defaultModulation.depth),
+    targets: {
+      noiseFilter:
+        typeof incomingTargets?.noiseFilter === 'boolean'
+          ? incomingTargets.noiseFilter
+          : defaultModulation.targets.noiseFilter,
+      noiseWidth:
+        typeof incomingTargets?.noiseWidth === 'boolean'
+          ? incomingTargets.noiseWidth
+          : defaultModulation.targets.noiseWidth,
+      oscillatorPan:
+        typeof incomingTargets?.oscillatorPan === 'boolean'
+          ? incomingTargets.oscillatorPan
+          : defaultModulation.targets.oscillatorPan,
+    },
+  };
+};
+
+export const normalizeTextureLayer = (
+  incomingTextureLayer?: Partial<TextureLayerState>
+): TextureLayerState => {
+  return {
+    enabled:
+      typeof incomingTextureLayer?.enabled === 'boolean'
+        ? incomingTextureLayer.enabled
+        : defaultTextureLayer.enabled,
+    type: isTextureType(incomingTextureLayer?.type)
+      ? incomingTextureLayer.type
+      : defaultTextureLayer.type,
+    gain: clamp(incomingTextureLayer?.gain, 0, 1, defaultTextureLayer.gain),
+    tone: clamp(incomingTextureLayer?.tone, 0, 1, defaultTextureLayer.tone),
+    width: clamp(incomingTextureLayer?.width, 0, 1, defaultTextureLayer.width),
+    motion: clamp(incomingTextureLayer?.motion, 0, 1, defaultTextureLayer.motion),
+  };
+};
+
+export const normalizeCreatorSession = (
+  incomingCreatorSession?: Partial<CreatorSessionState>
+): CreatorSessionState => {
+  return {
+    title: normalizeLimitedText(
+      incomingCreatorSession?.title,
+      defaultCreatorSession.title,
+      MAX_CREATOR_TITLE_LENGTH
+    ),
+    purpose: normalizeLimitedText(
+      incomingCreatorSession?.purpose,
+      defaultCreatorSession.purpose,
+      MAX_CREATOR_PURPOSE_LENGTH
+    ),
+    notes: normalizeLimitedText(
+      incomingCreatorSession?.notes,
+      defaultCreatorSession.notes,
+      MAX_CREATOR_NOTES_LENGTH
+    ),
+    visualTheme: normalizeLimitedText(
+      incomingCreatorSession?.visualTheme,
+      defaultCreatorSession.visualTheme,
+      MAX_CREATOR_VISUAL_THEME_LENGTH
+    ),
+    storyboardNotes: normalizeLimitedText(
+      incomingCreatorSession?.storyboardNotes,
+      defaultCreatorSession.storyboardNotes,
+      MAX_CREATOR_STORYBOARD_NOTES_LENGTH
+    ),
+    durationMinutes: clamp(
+      incomingCreatorSession?.durationMinutes,
+      1,
+      720,
+      defaultCreatorSession.durationMinutes
+    ),
+    exportSlug: normalizeLimitedText(
+      incomingCreatorSession?.exportSlug,
+      defaultCreatorSession.exportSlug,
+      MAX_CREATOR_EXPORT_SLUG_LENGTH
+    ),
+  };
 };
 
 export const getEffectiveOscillatorGain = (
@@ -653,6 +1086,7 @@ const normalizePreset = (preset: Partial<Preset>): Preset => {
     ),
     headphonesRecommended:
       typeof preset.headphonesRecommended === 'boolean' ? preset.headphonesRecommended : false,
+    exportReady: typeof preset.exportReady === 'boolean' ? preset.exportReady : false,
     caution: normalizeLimitedText(
       preset.caution,
       defaultPresetCaution,
@@ -668,6 +1102,9 @@ const normalizePreset = (preset: Partial<Preset>): Preset => {
     noiseHighpassFrequency: normalizeNoiseHighpassFrequency(preset.noiseHighpassFrequency),
     noiseLowpassFrequency: normalizeNoiseLowpassFrequency(preset.noiseLowpassFrequency),
     noiseStereoWidth: normalizeNoiseStereoWidth(preset.noiseStereoWidth),
+    modulation: normalizeModulation(preset.modulation),
+    textureLayer: normalizeTextureLayer(preset.textureLayer),
+    creatorSession: normalizeCreatorSession(preset.creatorSession),
     createdAt: clamp(preset.createdAt, 0, Number.MAX_SAFE_INTEGER, Date.now()),
   };
 };
@@ -696,6 +1133,9 @@ export const useAuralisStore = create<AuralisState>()(
       noiseHighpassFrequency: defaultNoiseHighpassFrequency,
       noiseLowpassFrequency: defaultNoiseLowpassFrequency,
       noiseStereoWidth: defaultNoiseStereoWidth,
+      modulation: cloneModulation(defaultModulation),
+      textureLayer: cloneTextureLayer(defaultTextureLayer),
+      creatorSession: cloneCreatorSession(defaultCreatorSession),
 
       setOscillatorFrequency: (index, freq) =>
         set((state) => {
@@ -705,6 +1145,19 @@ export const useAuralisStore = create<AuralisState>()(
           newOscillators[index] = {
             ...newOscillators[index],
             frequency: clamp(freq, 20, 20000, newOscillators[index].frequency),
+          };
+
+          return { oscillators: newOscillators };
+        }),
+
+      setOscillatorDetune: (index, detuneCents) =>
+        set((state) => {
+          const newOscillators = cloneOscillators(state.oscillators);
+          if (!newOscillators[index]) return state;
+
+          newOscillators[index] = {
+            ...newOscillators[index],
+            detuneCents: clamp(detuneCents, -1200, 1200, newOscillators[index].detuneCents),
           };
 
           return { oscillators: newOscillators };
@@ -749,6 +1202,19 @@ export const useAuralisStore = create<AuralisState>()(
           return { oscillators: newOscillators };
         }),
 
+      setOscillatorPhase: (index, phaseDegrees) =>
+        set((state) => {
+          const newOscillators = cloneOscillators(state.oscillators);
+          if (!newOscillators[index]) return state;
+
+          newOscillators[index] = {
+            ...newOscillators[index],
+            phaseDegrees: clamp(phaseDegrees, 0, 360, newOscillators[index].phaseDegrees),
+          };
+
+          return { oscillators: newOscillators };
+        }),
+
       setOscillatorMuted: (index, muted) =>
         set((state) => {
           const newOscillators = cloneOscillators(state.oscillators);
@@ -788,6 +1254,19 @@ export const useAuralisStore = create<AuralisState>()(
           return { oscillators: newOscillators };
         }),
 
+      setOscillatorTremoloShape: (index, shape) =>
+        set((state) => {
+          const newOscillators = cloneOscillators(state.oscillators);
+          if (!newOscillators[index]) return state;
+
+          newOscillators[index] = {
+            ...newOscillators[index],
+            tremoloShape: isWaveformType(shape) ? shape : newOscillators[index].tremoloShape,
+          };
+
+          return { oscillators: newOscillators };
+        }),
+
       setOscillatorTremoloRate: (index, rate) =>
         set((state) => {
           const newOscillators = cloneOscillators(state.oscillators);
@@ -814,11 +1293,38 @@ export const useAuralisStore = create<AuralisState>()(
           return { oscillators: newOscillators };
         }),
 
+      setOscillatorEnvelope: (index, attackSeconds, releaseSeconds) =>
+        set((state) => {
+          const newOscillators = cloneOscillators(state.oscillators);
+          if (!newOscillators[index]) return state;
+
+          newOscillators[index] = {
+            ...newOscillators[index],
+            attackSeconds: clamp(attackSeconds, 0.001, 5, newOscillators[index].attackSeconds),
+            releaseSeconds: clamp(releaseSeconds, 0.01, 10, newOscillators[index].releaseSeconds),
+          };
+
+          return { oscillators: newOscillators };
+        }),
+
       setMasterVolume: (volume) =>
         set((state) => ({
           masterFX: {
             ...state.masterFX,
             masterVolume: clamp(volume, 0, 1, state.masterFX.masterVolume),
+          },
+        })),
+
+      setLimiterThreshold: (thresholdDb) =>
+        set((state) => ({
+          masterFX: {
+            ...state.masterFX,
+            limiterThresholdDb: clamp(
+              thresholdDb,
+              -12,
+              -0.1,
+              state.masterFX.limiterThresholdDb
+            ),
           },
         })),
 
@@ -838,6 +1344,14 @@ export const useAuralisStore = create<AuralisState>()(
           },
         })),
 
+      setReverbPreDelay: (preDelay) =>
+        set((state) => ({
+          masterFX: {
+            ...state.masterFX,
+            reverbPreDelay: clamp(preDelay, 0, 0.5, state.masterFX.reverbPreDelay),
+          },
+        })),
+
       setAutoPannerRate: (rate) =>
         set((state) => ({
           masterFX: {
@@ -851,6 +1365,99 @@ export const useAuralisStore = create<AuralisState>()(
           masterFX: {
             ...state.masterFX,
             autoPannerDepth: clamp(depth, 0, 1, state.masterFX.autoPannerDepth),
+          },
+        })),
+
+      setEqEnabled: (enabled) =>
+        set((state) => ({
+          masterFX: {
+            ...state.masterFX,
+            eqEnabled: enabled,
+          },
+        })),
+
+      setEqGain: (band, gain) =>
+        set((state) => {
+          const key =
+            band === 'low' ? 'eqLowGain' : band === 'mid' ? 'eqMidGain' : 'eqHighGain';
+
+          return {
+            masterFX: {
+              ...state.masterFX,
+              [key]: clamp(gain, -12, 12, state.masterFX[key]),
+            },
+          };
+        }),
+
+      setStereoWidth: (width) =>
+        set((state) => ({
+          masterFX: {
+            ...state.masterFX,
+            stereoWidth: clamp(width, 0, 1, state.masterFX.stereoWidth),
+          },
+        })),
+
+      setDelayEnabled: (enabled) =>
+        set((state) => ({
+          masterFX: {
+            ...state.masterFX,
+            delayEnabled: enabled,
+          },
+        })),
+
+      setDelayWet: (wet) =>
+        set((state) => ({
+          masterFX: {
+            ...state.masterFX,
+            delayWet: clamp(wet, 0, 1, state.masterFX.delayWet),
+          },
+        })),
+
+      setDelayTime: (time) =>
+        set((state) => ({
+          masterFX: {
+            ...state.masterFX,
+            delayTime: clamp(time, 0.01, 1, state.masterFX.delayTime),
+          },
+        })),
+
+      setDelayFeedback: (feedback) =>
+        set((state) => ({
+          masterFX: {
+            ...state.masterFX,
+            delayFeedback: clamp(feedback, 0, 0.9, state.masterFX.delayFeedback),
+          },
+        })),
+
+      setChorusEnabled: (enabled) =>
+        set((state) => ({
+          masterFX: {
+            ...state.masterFX,
+            chorusEnabled: enabled,
+          },
+        })),
+
+      setChorusWet: (wet) =>
+        set((state) => ({
+          masterFX: {
+            ...state.masterFX,
+            chorusWet: clamp(wet, 0, 1, state.masterFX.chorusWet),
+          },
+        })),
+
+      setChorusRate: (rate) =>
+        set((state) => ({
+          masterFX: {
+            ...state.masterFX,
+            chorusRate: clamp(rate, 0.05, 8, state.masterFX.chorusRate),
+          },
+        })),
+
+      setChorusDepth: (depth) =>
+        set((state) => ({
+          masterFX: {
+            ...state.masterFX,
+            chorusDepth: clamp(depth, 0, 1, state.masterFX.chorusDepth),
           },
         })),
 
@@ -900,6 +1507,97 @@ export const useAuralisStore = create<AuralisState>()(
           noiseStereoWidth: clamp(width, 0, 1, state.noiseStereoWidth),
         })),
 
+      setModulationMode: (mode) =>
+        set((state) => ({
+          modulation: {
+            ...state.modulation,
+            mode: isModulationMode(mode) ? mode : state.modulation.mode,
+          },
+        })),
+
+      setModulationRate: (rate) =>
+        set((state) => ({
+          modulation: {
+            ...state.modulation,
+            rate: clamp(rate, 0.01, 1, state.modulation.rate),
+          },
+        })),
+
+      setModulationDepth: (depth) =>
+        set((state) => ({
+          modulation: {
+            ...state.modulation,
+            depth: clamp(depth, 0, 1, state.modulation.depth),
+          },
+        })),
+
+      setModulationTarget: (target, enabled) =>
+        set((state) => ({
+          modulation: {
+            ...state.modulation,
+            targets: {
+              ...state.modulation.targets,
+              [target]: enabled,
+            },
+          },
+        })),
+
+      setTextureLayerEnabled: (enabled) =>
+        set((state) => ({
+          textureLayer: {
+            ...state.textureLayer,
+            enabled,
+          },
+        })),
+
+      setTextureLayerType: (type) =>
+        set((state) => ({
+          textureLayer: {
+            ...state.textureLayer,
+            type: isTextureType(type) ? type : state.textureLayer.type,
+          },
+        })),
+
+      setTextureLayerGain: (gain) =>
+        set((state) => ({
+          textureLayer: {
+            ...state.textureLayer,
+            gain: clamp(gain, 0, 1, state.textureLayer.gain),
+          },
+        })),
+
+      setTextureLayerTone: (tone) =>
+        set((state) => ({
+          textureLayer: {
+            ...state.textureLayer,
+            tone: clamp(tone, 0, 1, state.textureLayer.tone),
+          },
+        })),
+
+      setTextureLayerWidth: (width) =>
+        set((state) => ({
+          textureLayer: {
+            ...state.textureLayer,
+            width: clamp(width, 0, 1, state.textureLayer.width),
+          },
+        })),
+
+      setTextureLayerMotion: (motion) =>
+        set((state) => ({
+          textureLayer: {
+            ...state.textureLayer,
+            motion: clamp(motion, 0, 1, state.textureLayer.motion),
+          },
+        })),
+
+      setCreatorSessionField: (field, value) =>
+        set((state) => ({
+          creatorSession: normalizeCreatorSession({
+            ...state.creatorSession,
+            [field]: value,
+          }),
+        })),
+
       savePreset: (name) => {
         const state = get();
 
@@ -910,6 +1608,7 @@ export const useAuralisStore = create<AuralisState>()(
           description: defaultPresetDescription,
           intendedUse: defaultPresetIntendedUse,
           headphonesRecommended: false,
+          exportReady: true,
           caution: defaultPresetCaution,
           tags: ['custom'],
           oscillators: cloneOscillators(state.oscillators),
@@ -920,6 +1619,12 @@ export const useAuralisStore = create<AuralisState>()(
           noiseHighpassFrequency: state.noiseHighpassFrequency,
           noiseLowpassFrequency: state.noiseLowpassFrequency,
           noiseStereoWidth: state.noiseStereoWidth,
+          modulation: cloneModulation(state.modulation),
+          textureLayer: cloneTextureLayer(state.textureLayer),
+          creatorSession: normalizeCreatorSession({
+            ...state.creatorSession,
+            title: state.creatorSession.title || normalizePresetName(name),
+          }),
           createdAt: Date.now(),
         };
 
@@ -947,6 +1652,9 @@ export const useAuralisStore = create<AuralisState>()(
           noiseHighpassFrequency: normalizeNoiseHighpassFrequency(preset.noiseHighpassFrequency),
           noiseLowpassFrequency: normalizeNoiseLowpassFrequency(preset.noiseLowpassFrequency),
           noiseStereoWidth: normalizeNoiseStereoWidth(preset.noiseStereoWidth),
+          modulation: normalizeModulation(preset.modulation),
+          textureLayer: normalizeTextureLayer(preset.textureLayer),
+          creatorSession: normalizeCreatorSession(preset.creatorSession),
           isBinauralMode: false,
           binauralPreset: null,
         });
@@ -974,6 +1682,9 @@ export const useAuralisStore = create<AuralisState>()(
           ),
           noiseLowpassFrequency: normalizeNoiseLowpassFrequency(payload.noiseLowpassFrequency),
           noiseStereoWidth: normalizeNoiseStereoWidth(payload.noiseStereoWidth),
+          modulation: normalizeModulation(payload.modulation),
+          textureLayer: normalizeTextureLayer(payload.textureLayer),
+          creatorSession: normalizeCreatorSession(payload.creatorSession),
           isBinauralMode:
             typeof payload.isBinauralMode === 'boolean' ? payload.isBinauralMode : false,
           binauralPreset:
@@ -996,6 +1707,9 @@ export const useAuralisStore = create<AuralisState>()(
           noiseHighpassFrequency: defaultNoiseHighpassFrequency,
           noiseLowpassFrequency: defaultNoiseLowpassFrequency,
           noiseStereoWidth: defaultNoiseStereoWidth,
+          modulation: cloneModulation(defaultModulation),
+          textureLayer: cloneTextureLayer(defaultTextureLayer),
+          creatorSession: cloneCreatorSession(defaultCreatorSession),
           presets: mergePresets(get().presets),
         }),
     }),

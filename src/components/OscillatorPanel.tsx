@@ -8,23 +8,32 @@ import type { WaveformType } from '@/lib/audioEngine';
 interface OscillatorPanelProps {
   index: number;
   frequency: number;
+  detuneCents: number;
   gain: number;
   waveform: WaveformType;
   pan: number;
+  phaseDegrees: number;
   muted: boolean;
   soloed: boolean;
   tremoloEnabled: boolean;
+  tremoloShape: WaveformType;
   tremoloRate: number;
   tremoloDepth: number;
+  attackSeconds: number;
+  releaseSeconds: number;
   onFrequencyChange: (linearValue: number) => void;
+  onDetuneChange: (detuneCents: number) => void;
   onGainChange: (gain: number) => void;
   onWaveformChange: (waveform: WaveformType) => void;
   onPanChange: (pan: number) => void;
+  onPhaseChange: (phaseDegrees: number) => void;
   onMuteToggle: (muted: boolean) => void;
   onSoloToggle: (soloed: boolean) => void;
   onTremoloToggle: (enabled: boolean) => void;
+  onTremoloShapeChange: (shape: WaveformType) => void;
   onTremoloRateChange: (rate: number) => void;
   onTremoloDepthChange: (depth: number) => void;
+  onEnvelopeChange: (attackSeconds: number, releaseSeconds: number) => void;
 }
 
 const WAVEFORMS: Array<{ value: WaveformType; label: string; title: string }> = [
@@ -54,23 +63,32 @@ const COLORS = [
 export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
   index,
   frequency,
+  detuneCents,
   gain,
   waveform,
   pan,
+  phaseDegrees,
   muted,
   soloed,
   tremoloEnabled,
+  tremoloShape,
   tremoloRate,
   tremoloDepth,
+  attackSeconds,
+  releaseSeconds,
   onFrequencyChange,
+  onDetuneChange,
   onGainChange,
   onWaveformChange,
   onPanChange,
+  onPhaseChange,
   onMuteToggle,
   onSoloToggle,
   onTremoloToggle,
+  onTremoloShapeChange,
   onTremoloRateChange,
   onTremoloDepthChange,
+  onEnvelopeChange,
 }) => {
   const color = COLORS[index];
   const linearFreq = logFrequencyToLinear(frequency, 20, 20000);
@@ -86,6 +104,18 @@ export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
 
   const handleFrequencyNudge = (deltaHz: number) => {
     onFrequencyChange(logFrequencyToLinear(nudgeFrequency(frequency, deltaHz), 20, 20000));
+  };
+
+  const handleNumberChange = (
+    value: string,
+    min: number,
+    max: number,
+    onChange: (nextValue: number) => void
+  ) => {
+    const parsedValue = parseFloat(value);
+    if (Number.isNaN(parsedValue)) return;
+
+    onChange(clamp(parsedValue, min, max));
   };
 
   const handlePercentChange = (
@@ -295,6 +325,94 @@ export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
               className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-slate-700"
               disabled={!tremoloEnabled}
               aria-label={`Oscillator ${index + 1} tremolo depth slider`}
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="mt-3 border-t border-white/10 pt-3">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <span className="text-xs font-medium text-slate-400">Advanced</span>
+          <select
+            value={tremoloShape}
+            onChange={(event) => onTremoloShapeChange(event.target.value as WaveformType)}
+            className="rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-[11px] text-slate-200 outline-none focus:border-cyan-400"
+            aria-label={`Oscillator ${index + 1} tremolo shape`}
+          >
+            {WAVEFORMS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.title}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="space-y-1 text-xs text-slate-400">
+            <span className="flex items-center justify-between">
+              Detune <span className={color.accent}>{detuneCents.toFixed(0)}c</span>
+            </span>
+            <input
+              type="number"
+              min="-1200"
+              max="1200"
+              step="1"
+              value={Number(detuneCents.toFixed(0))}
+              onChange={(event) =>
+                handleNumberChange(event.target.value, -1200, 1200, onDetuneChange)
+              }
+              className="h-8 w-full rounded-lg border border-slate-700 bg-slate-950/75 px-2 py-1 text-right text-xs text-slate-100 outline-none focus:border-cyan-400"
+              aria-label={`Oscillator ${index + 1} detune cents`}
+            />
+          </label>
+          <label className="space-y-1 text-xs text-slate-400">
+            <span className="flex items-center justify-between">
+              Phase <span className={color.accent}>{phaseDegrees.toFixed(0)}°</span>
+            </span>
+            <input
+              type="number"
+              min="0"
+              max="360"
+              step="1"
+              value={Number(phaseDegrees.toFixed(0))}
+              onChange={(event) =>
+                handleNumberChange(event.target.value, 0, 360, onPhaseChange)
+              }
+              className="h-8 w-full rounded-lg border border-slate-700 bg-slate-950/75 px-2 py-1 text-right text-xs text-slate-100 outline-none focus:border-cyan-400"
+              aria-label={`Oscillator ${index + 1} phase degrees`}
+            />
+          </label>
+          <label className="space-y-1 text-xs text-slate-400">
+            <span className="flex items-center justify-between">
+              Attack <span className={color.accent}>{attackSeconds.toFixed(2)}s</span>
+            </span>
+            <input
+              type="range"
+              min="0.001"
+              max="5"
+              step="0.001"
+              value={attackSeconds}
+              onChange={(event) =>
+                onEnvelopeChange(parseFloat(event.target.value), releaseSeconds)
+              }
+              className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-slate-700"
+              aria-label={`Oscillator ${index + 1} attack seconds`}
+            />
+          </label>
+          <label className="space-y-1 text-xs text-slate-400">
+            <span className="flex items-center justify-between">
+              Release <span className={color.accent}>{releaseSeconds.toFixed(2)}s</span>
+            </span>
+            <input
+              type="range"
+              min="0.01"
+              max="10"
+              step="0.01"
+              value={releaseSeconds}
+              onChange={(event) =>
+                onEnvelopeChange(attackSeconds, parseFloat(event.target.value))
+              }
+              className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-slate-700"
+              aria-label={`Oscillator ${index + 1} release seconds`}
             />
           </label>
         </div>

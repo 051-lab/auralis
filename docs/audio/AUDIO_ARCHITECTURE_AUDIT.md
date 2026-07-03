@@ -1,10 +1,10 @@
 # Auralis Audio Architecture Audit
 
-This audit describes the current browser audio implementation as of the premium dashboard UI pass. It is intended to guide future audio work without changing behavior in this pass.
+This audit describes the current browser audio implementation after the premium dashboard, metering, modulation, and texture-layer passes. It is intended to guide future audio work without requiring risky full-engine rewrites.
 
 ## Current Audio Graph Overview
 
-Auralis uses Tone.js through a singleton `AudioEngine` in `src/lib/audioEngine.ts`. The app creates four oscillator channels and one optional noise layer, then routes them into a shared master chain.
+Auralis uses Tone.js through a singleton `AudioEngine` in `src/lib/audioEngine.ts`. The app creates four oscillator channels, one optional noise layer, and one optional procedural texture layer, then routes them into a shared master chain.
 
 Current signal flow:
 
@@ -20,6 +20,20 @@ Noise
   -> noiseHighpassFilter
   -> noiseLowpassFilter
   -> noiseStereoWidener
+  -> masterGain
+
+Texture Noise
+  -> textureNoiseGain
+  -> textureHighpassFilter
+  -> textureLowpassFilter
+  -> textureGain
+  -> textureStereoWidener
+  -> masterGain
+
+Texture Oscillator
+  -> textureOscillatorGain
+  -> textureGain
+  -> textureStereoWidener
   -> masterGain
 
 masterGain
@@ -40,6 +54,7 @@ Important implementation details:
 - `AudioEngine` is lazy-created and stored on `globalThis` during development to reduce hot-module-reload graph duplication.
 - Audio starts only after a user gesture via `Tone.start()`.
 - Oscillator source nodes are started once, then output is controlled by gain and fade nodes.
+- Texture sources are started once on demand, then controlled through a dedicated texture gain stage.
 - A `Tone.Limiter(-1)` is already in the wet output path before analyser, destination, and wet recording.
 - Dry recording taps the chain at `transportFade`, before reverb, auto-panner, analyser, and destination, then passes through a dedicated `Tone.Limiter(-1)` before the dry recorder.
 
@@ -113,8 +128,8 @@ The app disables reverb wet and auto-panner depth during manual binaural activat
 Risks:
 
 - Binaural behavior depends on stereo headphones and user listening setup.
-- There is no explicit headphone-only workflow gate, only guidance copy.
-- No validation yet distinguishes comfortable beat-frequency ranges from experimental or potentially distracting ranges.
+- The inline acknowledgement gate improves safety, but it cannot verify the listener is actually using headphones.
+- Beat-frequency guidance distinguishes gentle, steady, focused, and experimental ranges, but it remains descriptive and not deterministic.
 
 ## Current Tremolo Behavior
 
@@ -141,8 +156,8 @@ Strengths:
 
 Risks:
 
-- Tremolo shape is fixed to the default LFO behavior.
-- There are no phase controls or sync relationships between oscillator tremolos.
+- Tremolo shape is now selectable, so square/saw movement should be used carefully at high depths.
+- Phase controls exist per oscillator, but there is not yet a global phase reset/sync command across the whole rack.
 - Very high tremolo rates can cross into roughness/ring-modulation territory for some listeners.
 
 ## Current Noise Layer Behavior
@@ -178,12 +193,73 @@ Strengths:
 - Noise can act as a soft masking bed under oscillator tones.
 - Noise type, level, filter cutoffs, and stereo width are stored in presets and shared URLs.
 - The high-pass, low-pass, and width controls help shape the bed without adding another full effect section.
+- The modulation model can move noise filter and width within bounded ranges.
 
 Risks:
 
 - Stereo width can make the noise bed feel larger, but high width values should remain optional for headphone comfort.
-- There is no animated movement control specific to noise.
 - White noise at high gain can become uncomfortable quickly.
+
+## Current Texture Layer Behavior
+
+The texture layer is a separate generated branch intended for subtle ambience under the oscillator/noise design. It supports:
+
+- Rain
+- Storm
+- Wind
+- Ocean
+- Drone
+
+The layer uses filtered noise plus an optional low oscillator for heavier profiles such as storm and drone. Controls are stored in presets and shared URLs:
+
+- Enabled/bypass
+- Texture type
+- Level
+- Tone
+- Stereo width
+- Motion
+
+Strengths:
+
+- Texture is behind its own gain stage, so it can be kept quieter than the oscillator bed.
+- Profiles are procedural and browser-local; no external sample assets are required.
+- Texture motion moves filter cutoff and width slowly instead of adding abrupt effects.
+
+Risks:
+
+- Procedural texture profiles are useful but not as realistic as curated recordings.
+- The drone texture adds another oscillator-like source, so preset review should watch output meter behavior.
+- Texture width and motion need headphone comfort testing.
+
+## Current Modulation Behavior
+
+The modulation system is a bounded engine-side scheduler with preset-safe state. Modes:
+
+- Off
+- Gentle
+- Breathing
+- Pulse
+- Drift
+
+Targets:
+
+- Noise filter
+- Noise width
+- Oscillator pan
+
+Oscillator-pan modulation is automatically disabled while binaural mode is active, preserving hard-left/hard-right carrier separation.
+
+Strengths:
+
+- Movement is restricted to existing clamped parameters.
+- Turning modulation off restores base noise and pan settings.
+- Presets can carry movement settings without rewriting the core audio graph.
+
+Risks:
+
+- Modulation uses a lightweight interval scheduler rather than sample-accurate audio-rate automation.
+- Pulse mode should be used gently because abrupt perceived movement can be distracting.
+- Future modulation targets should be added one at a time with listening tests.
 
 ## Current Reverb Behavior
 
@@ -191,29 +267,37 @@ Reverb uses `Tone.Reverb` with:
 
 - Wet/dry control: 0-1
 - Decay control: 0.2-12 seconds
+- Pre-delay control: 0-0.5 seconds
 - Default wet: 0.3
 - Default decay: 6 seconds
+- Default pre-delay: 0.01 seconds
 
-The app regenerates the reverb when decay changes.
+The app regenerates the reverb when decay or pre-delay changes.
 
 Strengths:
 
-- Reverb wet and decay are exposed to users.
+- Reverb wet, decay, and pre-delay are exposed to users.
 - Binaural activation sets wet reverb to 0 to preserve interaural frequency difference.
 
 Risks:
 
 - Reverb regeneration may be expensive or audible if changed aggressively.
-- There is no pre-delay, damping, width, or room type control.
+- There is no damping, room type, or convolution option.
 - Reverb can smear binaural cues if users manually re-enable it during binaural-style sessions.
+
+## Current Master Chain Behavior
+
+The main post-master chain is fixed-order:
+
+```text
+masterGain -> userVolume -> transportFade -> Reverb -> AutoPanner -> EQ -> Delay -> Chorus -> StereoWidener -> Limiter -> Analyser -> Destination
+```
+
+The dry recorder taps `transportFade` before these wet/master effects, then passes through its own limiter.
 
 ## Current Auto-Panner Behavior
 
-Auto-panner uses `Tone.AutoPanner` after reverb:
-
-```text
-Reverb -> AutoPanner -> Limiter
-```
+Auto-panner uses `Tone.AutoPanner` after reverb.
 
 Controls:
 
@@ -232,6 +316,28 @@ Risks:
 - Fast panning can be fatiguing.
 - Panning after reverb moves the whole wet signal, not individual layers.
 - Auto-panning conflicts with strict binaural beat presentation.
+
+## Current EQ, Delay, Chorus, Width, and Limiter Behavior
+
+The expanded master chain adds bypass-safe controls after auto-panning:
+
+- EQ: three-band low/mid/high gain, +/-12 dB, disabled by default
+- Delay: wet, delay time, feedback, disabled by default
+- Chorus: wet, rate, depth, disabled by default
+- Master stereo width: 0-100%, default 50%
+- Limiter ceiling: user-selectable between -12 dB and -0.1 dB, default -1 dB
+
+Strengths:
+
+- New effects are silent/bypassed by default, preserving existing presets until the user opts in.
+- Limiter ceiling is visible and user-adjustable while preserving a final safety stage.
+- The fixed order keeps the graph predictable and easier to document/test.
+
+Risks:
+
+- EQ boosts, delay feedback, chorus width, and texture layers can stack into hot output; use the output meter during preset design.
+- Delay and chorus can blur strict binaural-carrier separation and should remain off for binaural-focused presets.
+- The chain is fixed-order; users cannot reorder modules yet.
 
 ## Current Analyser and Visualizer Relationship
 
@@ -314,8 +420,8 @@ Risks:
 
 ## Strengths of the Current Implementation
 
-- Clear Tone.js graph with separable oscillators, noise, FX, analyser, and recorder.
-- Safe clamping for frequency, gain, pan, tremolo, noise, and master FX values.
+- Clear Tone.js graph with separable oscillators, noise, texture, FX, analyser, and recorder.
+- Safe clamping for frequency, gain, pan, tremolo, noise, texture, modulation, and master FX values.
 - Master volume and limiter are already present.
 - Binaural activation makes a real hard-left/hard-right pair and suppresses stereo-smearing FX.
 - Start/stop and timer completion use cancellable fades with a visible `Fading` state.
@@ -329,14 +435,15 @@ Risks:
 - Dry export is safety-limited but still bypasses wet FX by design.
 - Reverb regeneration can become a performance or UX concern.
 - Binaural mode relies on user headphone setup and responsible copy.
-- Noise still lacks deeper tone macros and motion controls.
+- Texture and modulation now exist, but their preset defaults need systematic listening review.
 - Audio graph behavior has little direct automated test coverage.
 - Presets now carry responsible-use metadata, but future preset work may need richer browsing and detail views.
 - Some important audio behaviors are embedded in `page.tsx`, making future audio feature expansion harder.
 
 ## Immediate Improvement Opportunities
 
-1. Add deeper noise tone/motion controls after testing the current filter and stereo width pass.
+1. Review all built-in presets with the output meter after texture/modulation additions.
 2. Add export helper tests for WAV encoding and browser compatibility behavior.
 3. Add richer preset browsing/detail views if the metadata outgrows compact cards.
 4. Keep binaural language conservative: "designed around" or "inspired by", not "causes" or "treats".
+5. Add original research notes from the knowledge base without copying copyrighted source content.

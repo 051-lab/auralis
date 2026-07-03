@@ -5,7 +5,9 @@ import {
   Activity,
   AudioWaveform,
   Boxes,
+  CloudRain,
   Circle,
+  Copy,
   Disc3,
   Download,
   Gauge,
@@ -20,14 +22,32 @@ import {
   Settings,
   Share2,
   SlidersHorizontal,
+  Sparkles,
   Square,
   Volume2,
   Waves,
 } from 'lucide-react';
 import { getAudioEngine } from '@/lib/audioEngine';
-import type { NoiseType, RecordingMode, WaveformType } from '@/lib/audioEngine';
-import { getEffectiveOscillatorGain, useAuralisStore } from '@/store/useAuralisStore';
-import type { MasterFXState, OscillatorState, SharedPresetPayload } from '@/store/useAuralisStore';
+import type {
+  ModulationMode,
+  NoiseType,
+  RecordingMode,
+  TextureType,
+  WaveformType,
+} from '@/lib/audioEngine';
+import {
+  CURRENT_PRESET_VERSION,
+  getEffectiveOscillatorGain,
+  useAuralisStore,
+} from '@/store/useAuralisStore';
+import type {
+  CreatorSessionState,
+  MasterFXState,
+  ModulationState,
+  OscillatorState,
+  SharedPresetPayload,
+  TextureLayerState,
+} from '@/store/useAuralisStore';
 import { OscillatorPanel } from '@/components/OscillatorPanel';
 import { OutputMeter } from '@/components/OutputMeter';
 import { Visualizer } from '@/components/Visualizer';
@@ -45,9 +65,19 @@ import {
 import { clamp } from '@/utils/math';
 import { decodeSharedPreset, encodeSharedPreset } from '@/utils/sharePreset';
 import {
+  createExportBlob,
+  getRecordingExtension,
   getRecordingModeDescription,
   getRecordingModeLabel,
 } from '@/utils/recordingExport';
+import type { ExportFormat, ExportSampleRate } from '@/utils/recordingExport';
+import { buildCreatorExportDraft } from '@/utils/creatorExport';
+import {
+  PRESET_CATEGORY_OPTIONS,
+  countPresetsByCategory,
+  filterPresets,
+} from '@/utils/presetFilters';
+import type { PresetCategory } from '@/utils/presetFilters';
 import { getPlaybackStatus, isAudiblePlayback } from '@/utils/playbackState';
 import { analytics } from '@/lib/analytics';
 import { useAnalytics } from '@/lib/useAnalytics';
@@ -76,6 +106,20 @@ const BINAURAL_PRESETS = [
 ];
 
 const NOISE_TYPES: NoiseType[] = ['brown', 'pink', 'white'];
+const MODULATION_MODES: Array<{ value: ModulationMode; label: string }> = [
+  { value: 'off', label: 'Off' },
+  { value: 'gentle', label: 'Gentle' },
+  { value: 'breathing', label: 'Breathing' },
+  { value: 'pulse', label: 'Pulse' },
+  { value: 'drift', label: 'Drift' },
+];
+const TEXTURE_TYPES: Array<{ value: TextureType; label: string }> = [
+  { value: 'rain', label: 'Rain' },
+  { value: 'storm', label: 'Storm' },
+  { value: 'wind', label: 'Wind' },
+  { value: 'ocean', label: 'Ocean' },
+  { value: 'drone', label: 'Drone' },
+];
 const MAX_SHARE_URL_LENGTH = 2000;
 const BINAURAL_TONE_CLASSES = {
   cyan: 'border-cyan-400/25 bg-cyan-400/10 text-cyan-300',
@@ -84,8 +128,6 @@ const BINAURAL_TONE_CLASSES = {
   violet: 'border-violet-400/25 bg-violet-400/10 text-violet-300',
 };
 const BINAURAL_ACKNOWLEDGEMENT_STORAGE_KEY = 'auralis-binaural-safety-acknowledged';
-type ExportFormat = 'wav' | 'webm';
-type ExportSampleRate = '44.1' | '48';
 
 type PendingBinauralActivation = {
   baseFrequency: number;
@@ -93,107 +135,7 @@ type PendingBinauralActivation = {
   label?: string;
 };
 
-function getRecordingExtension(mimeType: string): string {
-  if (mimeType.includes('wav')) return 'wav';
-  if (mimeType.includes('mpeg') || mimeType.includes('mp3')) return 'mp3';
-  if (mimeType.includes('ogg')) return 'ogg';
-  return 'webm';
-}
-
-function encodeWav24(audioBuffer: AudioBuffer): Blob {
-  const channelCount = audioBuffer.numberOfChannels;
-  const frameCount = audioBuffer.length;
-  const bytesPerSample = 3;
-  const blockAlign = channelCount * bytesPerSample;
-  const dataSize = frameCount * blockAlign;
-  const buffer = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(buffer);
-
-  const writeString = (offset: number, value: string) => {
-    for (let i = 0; i < value.length; i += 1) {
-      view.setUint8(offset + i, value.charCodeAt(i));
-    }
-  };
-
-  writeString(0, 'RIFF');
-  view.setUint32(4, 36 + dataSize, true);
-  writeString(8, 'WAVE');
-  writeString(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, channelCount, true);
-  view.setUint32(24, audioBuffer.sampleRate, true);
-  view.setUint32(28, audioBuffer.sampleRate * blockAlign, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, bytesPerSample * 8, true);
-  writeString(36, 'data');
-  view.setUint32(40, dataSize, true);
-
-  const channels = Array.from({ length: channelCount }, (_, index) =>
-    audioBuffer.getChannelData(index)
-  );
-  let offset = 44;
-
-  for (let frame = 0; frame < frameCount; frame += 1) {
-    for (let channel = 0; channel < channelCount; channel += 1) {
-      const sample = Math.max(-1, Math.min(1, channels[channel][frame] || 0));
-      const intSample = sample < 0 ? sample * 0x800000 : sample * 0x7fffff;
-      const value = Math.round(intSample);
-
-      view.setUint8(offset, value & 0xff);
-      view.setUint8(offset + 1, (value >> 8) & 0xff);
-      view.setUint8(offset + 2, (value >> 16) & 0xff);
-      offset += bytesPerSample;
-    }
-  }
-
-  return new Blob([buffer], { type: 'audio/wav' });
-}
-
-async function resampleAudioBuffer(
-  audioBuffer: AudioBuffer,
-  targetSampleRate: number
-): Promise<AudioBuffer> {
-  if (audioBuffer.sampleRate === targetSampleRate) return audioBuffer;
-
-  const offlineContext = new OfflineAudioContext(
-    audioBuffer.numberOfChannels,
-    Math.ceil(audioBuffer.duration * targetSampleRate),
-    targetSampleRate
-  );
-  const source = offlineContext.createBufferSource();
-
-  source.buffer = audioBuffer;
-  source.connect(offlineContext.destination);
-  source.start();
-
-  return offlineContext.startRendering();
-}
-
-async function createExportBlob(
-  recording: Blob,
-  exportFormat: ExportFormat,
-  exportSampleRate: ExportSampleRate
-): Promise<Blob> {
-  if (exportFormat !== 'wav') return recording;
-
-  const AudioContextConstructor =
-    window.AudioContext ||
-    (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-
-  if (!AudioContextConstructor) {
-    throw new Error('AudioContext is not available for WAV export');
-  }
-
-  const audioContext = new AudioContextConstructor();
-  const decodedBuffer = await audioContext.decodeAudioData(await recording.arrayBuffer());
-  const targetSampleRate = exportSampleRate === '44.1' ? 44100 : 48000;
-  const renderedBuffer = await resampleAudioBuffer(decodedBuffer, targetSampleRate);
-
-  await audioContext.close();
-
-  return encodeWav24(renderedBuffer);
-}
+type FrequencyLinkMode = 'free' | 'harmonic';
 
 function formatTime(totalSeconds: number | null | undefined): string {
   const safeSeconds = Math.max(0, Math.floor(totalSeconds ?? 0));
@@ -209,6 +151,10 @@ function clampNumber(value: number, min: number, max: number): number {
 
 function percentInputValue(value: number): number {
   return Number((value * 100).toFixed(0));
+}
+
+function numberInputValue(value: number): number {
+  return Number(value.toFixed(0));
 }
 
 function formatFilterFrequency(value: number): string {
@@ -233,6 +179,8 @@ export default function Home() {
   const [pendingBinauralActivation, setPendingBinauralActivation] =
     useState<PendingBinauralActivation | null>(null);
   const [presetSearch, setPresetSearch] = useState('');
+  const [presetCategory, setPresetCategory] = useState<PresetCategory>('all');
+  const [frequencyLinkMode, setFrequencyLinkMode] = useState<FrequencyLinkMode>('free');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [shareMessage, setShareMessage] = useState<string | null>(null);
   const [lastExportName, setLastExportName] = useState<string | null>(null);
@@ -248,6 +196,9 @@ export default function Home() {
     noiseHighpassFrequency: number;
     noiseLowpassFrequency: number;
     noiseStereoWidth: number;
+    modulation: ModulationState;
+    textureLayer: TextureLayerState;
+    isBinauralMode: boolean;
     isAudible: boolean;
   } | null>(null);
 
@@ -268,20 +219,40 @@ export default function Home() {
     noiseHighpassFrequency,
     noiseLowpassFrequency,
     noiseStereoWidth,
+    modulation,
+    textureLayer,
+    creatorSession,
     setOscillatorFrequency,
+    setOscillatorDetune,
     setOscillatorGain,
     setOscillatorWaveform,
     setOscillatorPan,
+    setOscillatorPhase,
     setOscillatorMuted,
     setOscillatorSoloed,
     setOscillatorTremoloEnabled,
+    setOscillatorTremoloShape,
     setOscillatorTremoloRate,
     setOscillatorTremoloDepth,
+    setOscillatorEnvelope,
     setMasterVolume,
+    setLimiterThreshold,
     setReverbWet,
     setReverbDecay,
+    setReverbPreDelay,
     setAutoPannerRate,
     setAutoPannerDepth,
+    setEqEnabled,
+    setEqGain,
+    setStereoWidth,
+    setDelayEnabled,
+    setDelayWet,
+    setDelayTime,
+    setDelayFeedback,
+    setChorusEnabled,
+    setChorusWet,
+    setChorusRate,
+    setChorusDepth,
     setBinauralMode,
     savePreset,
     loadPreset,
@@ -295,6 +266,17 @@ export default function Home() {
     setNoiseHighpassFrequency,
     setNoiseLowpassFrequency,
     setNoiseStereoWidth,
+    setModulationMode,
+    setModulationRate,
+    setModulationDepth,
+    setModulationTarget,
+    setTextureLayerEnabled,
+    setTextureLayerType,
+    setTextureLayerGain,
+    setTextureLayerTone,
+    setTextureLayerWidth,
+    setTextureLayerMotion,
+    setCreatorSessionField,
     applySharedPreset,
   } = useAuralisStore();
 
@@ -361,6 +343,10 @@ export default function Home() {
         engine.setFrequency(index, oscillator.frequency);
       }
 
+      if (!previousOscillator || previousOscillator.detuneCents !== oscillator.detuneCents) {
+        engine.setDetune(index, oscillator.detuneCents);
+      }
+
       if (!previousOscillator || previousEffectiveGain !== effectiveGain) {
         engine.setGain(index, effectiveGain);
       }
@@ -371,6 +357,22 @@ export default function Home() {
 
       if (!previousOscillator || previousOscillator.pan !== oscillator.pan) {
         engine.setPan(index, oscillator.pan);
+      }
+
+      if (!previousOscillator || previousOscillator.phaseDegrees !== oscillator.phaseDegrees) {
+        engine.setPhase(index, oscillator.phaseDegrees);
+      }
+
+      if (
+        !previousOscillator ||
+        previousOscillator.attackSeconds !== oscillator.attackSeconds ||
+        previousOscillator.releaseSeconds !== oscillator.releaseSeconds
+      ) {
+        engine.setEnvelope(index, oscillator.attackSeconds, oscillator.releaseSeconds);
+      }
+
+      if (!previousOscillator || previousOscillator.tremoloShape !== oscillator.tremoloShape) {
+        engine.setTremoloShape(index, oscillator.tremoloShape);
       }
 
       if (!previousOscillator || previousOscillator.tremoloRate !== oscillator.tremoloRate) {
@@ -390,6 +392,10 @@ export default function Home() {
       engine.setMasterVolume(masterFX.masterVolume);
     }
 
+    if (!previous || previous.masterFX.limiterThresholdDb !== masterFX.limiterThresholdDb) {
+      engine.setLimiterThreshold(masterFX.limiterThresholdDb);
+    }
+
     if (!previous || previous.masterFX.reverbWet !== masterFX.reverbWet) {
       engine.setReverbWet(masterFX.reverbWet);
     }
@@ -398,12 +404,68 @@ export default function Home() {
       engine.setReverbDecay(masterFX.reverbDecay);
     }
 
+    if (!previous || previous.masterFX.reverbPreDelay !== masterFX.reverbPreDelay) {
+      engine.setReverbPreDelay(masterFX.reverbPreDelay);
+    }
+
     if (!previous || previous.masterFX.autoPannerRate !== masterFX.autoPannerRate) {
       engine.setAutoPannerRate(masterFX.autoPannerRate);
     }
 
     if (!previous || previous.masterFX.autoPannerDepth !== masterFX.autoPannerDepth) {
       engine.setAutoPannerDepth(masterFX.autoPannerDepth);
+    }
+
+    const didEqChange =
+      !previous ||
+      previous.masterFX.eqEnabled !== masterFX.eqEnabled ||
+      previous.masterFX.eqLowGain !== masterFX.eqLowGain ||
+      previous.masterFX.eqMidGain !== masterFX.eqMidGain ||
+      previous.masterFX.eqHighGain !== masterFX.eqHighGain;
+
+    if (didEqChange) {
+      engine.setEq(
+        masterFX.eqEnabled,
+        masterFX.eqLowGain,
+        masterFX.eqMidGain,
+        masterFX.eqHighGain
+      );
+    }
+
+    if (!previous || previous.masterFX.stereoWidth !== masterFX.stereoWidth) {
+      engine.setMasterStereoWidth(masterFX.stereoWidth);
+    }
+
+    const didDelayChange =
+      !previous ||
+      previous.masterFX.delayEnabled !== masterFX.delayEnabled ||
+      previous.masterFX.delayWet !== masterFX.delayWet ||
+      previous.masterFX.delayTime !== masterFX.delayTime ||
+      previous.masterFX.delayFeedback !== masterFX.delayFeedback;
+
+    if (didDelayChange) {
+      engine.setDelay(
+        masterFX.delayEnabled,
+        masterFX.delayWet,
+        masterFX.delayTime,
+        masterFX.delayFeedback
+      );
+    }
+
+    const didChorusChange =
+      !previous ||
+      previous.masterFX.chorusEnabled !== masterFX.chorusEnabled ||
+      previous.masterFX.chorusWet !== masterFX.chorusWet ||
+      previous.masterFX.chorusRate !== masterFX.chorusRate ||
+      previous.masterFX.chorusDepth !== masterFX.chorusDepth;
+
+    if (didChorusChange) {
+      engine.setChorus(
+        masterFX.chorusEnabled,
+        masterFX.chorusWet,
+        masterFX.chorusRate,
+        masterFX.chorusDepth
+      );
     }
 
     if (!previous || previous.noiseType !== noiseType) {
@@ -432,6 +494,39 @@ export default function Home() {
       engine.stopNoise();
     }
 
+    const didModulationChange =
+      !previous ||
+      previous.modulation.mode !== modulation.mode ||
+      previous.modulation.rate !== modulation.rate ||
+      previous.modulation.depth !== modulation.depth ||
+      previous.modulation.targets.noiseFilter !== modulation.targets.noiseFilter ||
+      previous.modulation.targets.noiseWidth !== modulation.targets.noiseWidth ||
+      previous.modulation.targets.oscillatorPan !== modulation.targets.oscillatorPan ||
+      previous.isAudible !== isAudible ||
+      previous.isBinauralMode !== isBinauralMode;
+
+    if (didModulationChange) {
+      engine.setModulation({
+        ...modulation,
+        targets: { ...modulation.targets },
+        allowOscillatorPan: !isBinauralMode,
+      });
+    }
+
+    const didTextureLayerChange =
+      !previous ||
+      previous.textureLayer.enabled !== textureLayer.enabled ||
+      previous.textureLayer.type !== textureLayer.type ||
+      previous.textureLayer.gain !== textureLayer.gain ||
+      previous.textureLayer.tone !== textureLayer.tone ||
+      previous.textureLayer.width !== textureLayer.width ||
+      previous.textureLayer.motion !== textureLayer.motion ||
+      previous.isAudible !== isAudible;
+
+    if (didTextureLayerChange) {
+      engine.setTextureLayer(textureLayer);
+    }
+
     previousSyncRef.current = {
       oscillators: oscillators.map((oscillator) => ({ ...oscillator })),
       masterFX: { ...masterFX },
@@ -441,6 +536,12 @@ export default function Home() {
       noiseHighpassFrequency,
       noiseLowpassFrequency,
       noiseStereoWidth,
+      modulation: {
+        ...modulation,
+        targets: { ...modulation.targets },
+      },
+      textureLayer: { ...textureLayer },
+      isBinauralMode,
       isAudible,
     };
   }, [
@@ -453,6 +554,9 @@ export default function Home() {
     noiseHighpassFrequency,
     noiseLowpassFrequency,
     noiseStereoWidth,
+    modulation,
+    textureLayer,
+    isBinauralMode,
     isAudible,
   ]);
 
@@ -588,6 +692,28 @@ export default function Home() {
   const handleFrequencyChange = (index: number, linearValue: number) => {
     const freq = linearToLogFrequency(linearValue, 20, 20000);
     setOscillatorFrequency(index, freq);
+
+    if (frequencyLinkMode === 'harmonic' && index === 0) {
+      [2, 3, 4].forEach((ratio, ratioIndex) => {
+        setOscillatorFrequency(ratioIndex + 1, clampNumber(freq * ratio, 20, 20000));
+      });
+    }
+  };
+
+  const handleFrequencyLinkModeChange = (mode: FrequencyLinkMode) => {
+    setFrequencyLinkMode(mode);
+
+    if (mode === 'harmonic') {
+      const baseFrequency = oscillators[0]?.frequency ?? 200;
+
+      [2, 3, 4].forEach((ratio, ratioIndex) => {
+        setOscillatorFrequency(ratioIndex + 1, clampNumber(baseFrequency * ratio, 20, 20000));
+      });
+    }
+  };
+
+  const handleDetuneChange = (index: number, detuneCents: number) => {
+    setOscillatorDetune(index, detuneCents);
   };
 
   const handleGainChange = (index: number, gain: number) => {
@@ -602,6 +728,10 @@ export default function Home() {
     setOscillatorPan(index, pan);
   };
 
+  const handlePhaseChange = (index: number, phaseDegrees: number) => {
+    setOscillatorPhase(index, phaseDegrees);
+  };
+
   const handleMuteToggle = (index: number, muted: boolean) => {
     setOscillatorMuted(index, muted);
   };
@@ -614,6 +744,10 @@ export default function Home() {
     setOscillatorTremoloEnabled(index, enabled);
   };
 
+  const handleTremoloShapeChange = (index: number, shape: WaveformType) => {
+    setOscillatorTremoloShape(index, shape);
+  };
+
   const handleTremoloRateChange = (index: number, rate: number) => {
     setOscillatorTremoloRate(index, rate);
   };
@@ -622,8 +756,20 @@ export default function Home() {
     setOscillatorTremoloDepth(index, depth);
   };
 
+  const handleEnvelopeChange = (
+    index: number,
+    attackSeconds: number,
+    releaseSeconds: number
+  ) => {
+    setOscillatorEnvelope(index, attackSeconds, releaseSeconds);
+  };
+
   const handleMasterVolumeChange = (volume: number) => {
     setMasterVolume(volume);
+  };
+
+  const handleLimiterThresholdChange = (thresholdDb: number) => {
+    setLimiterThreshold(thresholdDb);
   };
 
   const handleReverbChange = (wet: number) => {
@@ -634,12 +780,48 @@ export default function Home() {
     setReverbDecay(decay);
   };
 
+  const handleReverbPreDelayChange = (preDelay: number) => {
+    setReverbPreDelay(preDelay);
+  };
+
   const handleAutoPannerRateChange = (rate: number) => {
     setAutoPannerRate(rate);
   };
 
   const handleAutoPannerDepthChange = (depth: number) => {
     setAutoPannerDepth(depth);
+  };
+
+  const handleEqGainChange = (band: 'low' | 'mid' | 'high', gain: number) => {
+    setEqGain(band, gain);
+  };
+
+  const handleStereoWidthChange = (width: number) => {
+    setStereoWidth(width);
+  };
+
+  const handleDelayWetChange = (wet: number) => {
+    setDelayWet(wet);
+  };
+
+  const handleDelayTimeChange = (time: number) => {
+    setDelayTime(time);
+  };
+
+  const handleDelayFeedbackChange = (feedback: number) => {
+    setDelayFeedback(feedback);
+  };
+
+  const handleChorusWetChange = (wet: number) => {
+    setChorusWet(wet);
+  };
+
+  const handleChorusRateChange = (rate: number) => {
+    setChorusRate(rate);
+  };
+
+  const handleChorusDepthChange = (depth: number) => {
+    setChorusDepth(depth);
   };
 
   const handleNoiseToggle = (enabled: boolean) => {
@@ -672,6 +854,56 @@ export default function Home() {
 
   const handleNoiseStereoWidthChange = (width: number) => {
     setNoiseStereoWidth(width);
+  };
+
+  const handleModulationModeChange = (mode: ModulationMode) => {
+    setModulationMode(mode);
+  };
+
+  const handleModulationRateChange = (rate: number) => {
+    setModulationRate(rate);
+  };
+
+  const handleModulationDepthChange = (depth: number) => {
+    setModulationDepth(depth);
+  };
+
+  const handleModulationTargetChange = (
+    target: keyof ModulationState['targets'],
+    enabled: boolean
+  ) => {
+    setModulationTarget(target, enabled);
+  };
+
+  const handleTextureToggle = (enabled: boolean) => {
+    setTextureLayerEnabled(enabled);
+  };
+
+  const handleTextureTypeChange = (type: TextureType) => {
+    setTextureLayerType(type);
+  };
+
+  const handleTextureGainChange = (gain: number) => {
+    setTextureLayerGain(gain);
+  };
+
+  const handleTextureToneChange = (tone: number) => {
+    setTextureLayerTone(tone);
+  };
+
+  const handleTextureWidthChange = (width: number) => {
+    setTextureLayerWidth(width);
+  };
+
+  const handleTextureMotionChange = (motion: number) => {
+    setTextureLayerMotion(motion);
+  };
+
+  const handleCreatorFieldChange = (
+    field: keyof CreatorSessionState,
+    value: string | number
+  ) => {
+    setCreatorSessionField(field, value);
   };
 
   const handlePercentInputChange = (
@@ -766,14 +998,18 @@ export default function Home() {
     if (snapshot) {
       snapshot.forEach((oscillator, index) => {
         setOscillatorFrequency(index, oscillator.frequency);
+        setOscillatorDetune(index, oscillator.detuneCents);
         setOscillatorGain(index, oscillator.gain);
         setOscillatorWaveform(index, oscillator.waveform);
         setOscillatorPan(index, oscillator.pan);
+        setOscillatorPhase(index, oscillator.phaseDegrees);
         setOscillatorMuted(index, oscillator.muted);
         setOscillatorSoloed(index, oscillator.soloed);
         setOscillatorTremoloEnabled(index, oscillator.tremoloEnabled);
+        setOscillatorTremoloShape(index, oscillator.tremoloShape);
         setOscillatorTremoloRate(index, oscillator.tremoloRate);
         setOscillatorTremoloDepth(index, oscillator.tremoloDepth);
+        setOscillatorEnvelope(index, oscillator.attackSeconds, oscillator.releaseSeconds);
       });
 
       binauralSnapshotRef.current = null;
@@ -807,11 +1043,12 @@ export default function Home() {
   const handleSharePreset = async () => {
     try {
       const sharedPreset: SharedPresetPayload = {
-        version: 1,
+        version: CURRENT_PRESET_VERSION,
         name: presetName.trim() || 'Auralis Shared Preset',
         description: 'Shared Auralis sound session generated from the current controls.',
         intendedUse: 'Shared session',
         headphonesRecommended: isBinauralMode,
+        exportReady: true,
         caution: 'Start at low volume and stop if the sound feels uncomfortable.',
         tags: isBinauralMode ? ['shared', 'binaural'] : ['shared'],
         oscillators,
@@ -822,6 +1059,9 @@ export default function Home() {
         noiseHighpassFrequency,
         noiseLowpassFrequency,
         noiseStereoWidth,
+        modulation,
+        textureLayer,
+        creatorSession,
         isBinauralMode,
         binauralPreset,
         createdAt: Date.now(),
@@ -902,9 +1142,8 @@ export default function Home() {
   const activeStatus = getPlaybackStatus(isPlaying, isFadingOut);
   const remainingLabel = timerRemaining !== null ? formatTime(timerRemaining) : '--:--';
   const builtInPresetCount = presets.filter((preset) => preset.id.startsWith('built-in-')).length;
-  const filteredPresets = presets.filter((preset) =>
-    preset.name.toLowerCase().includes(presetSearch.trim().toLowerCase())
-  );
+  const presetCategoryCounts = countPresetsByCategory(presets);
+  const filteredPresets = filterPresets(presets, presetSearch, presetCategory);
   const customBinauralPair = createBinauralPair(
     binauralBaseFrequency,
     customBinauralBeatFrequency
@@ -922,6 +1161,29 @@ export default function Home() {
       ? BINAURAL_PRESETS.find((preset) => preset.freq === pendingBinauralPair.beatFrequency)
           ?.name ?? 'Custom'
       : null);
+  const currentPresetName = currentPreset?.name ?? 'Manual Session';
+  const creatorDraft = buildCreatorExportDraft({
+    creatorSession,
+    presetName: currentPresetName,
+    recordingModeLabel: getRecordingModeLabel(recordingMode),
+    isBinauralMode,
+    headphonesRecommended: currentPreset?.headphonesRecommended ?? isBinauralMode,
+  });
+
+  const handleCopyCreatorDraft = async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(creatorDraft.copyText);
+        setShareMessage('Creator session notes copied.');
+      } else {
+        window.prompt('Copy these creator session notes:', creatorDraft.copyText);
+        setShareMessage('Creator session notes generated.');
+      }
+    } catch (err) {
+      console.error('Failed to copy creator session notes:', err);
+      setShareMessage('Failed to copy creator session notes.');
+    }
+  };
 
   return (
     <main className="min-h-screen overflow-hidden bg-[#060b18] text-slate-100">
@@ -1394,7 +1656,7 @@ export default function Home() {
           </aside>
         <GlassPanel id="sound-lab" className="p-5 xl:col-span-3">
           <SectionHeader title="Master Chain" description="Final signal shaping before output and recording." />
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-[1fr_1fr_1fr_1.25fr]">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
             <Card className={`space-y-3 p-4 ${noiseEnabled ? 'border-cyan-400/30 shadow-[0_0_32px_rgba(34,211,238,0.1)]' : ''}`}>
               <div className="flex items-center justify-between">
                 <h3 className="inline-flex items-center gap-2 text-sm font-semibold text-slate-200">
@@ -1460,6 +1722,71 @@ export default function Home() {
               />
             </Card>
 
+            <Card className={`space-y-3 p-4 ${textureLayer.enabled ? 'border-emerald-400/30 shadow-[0_0_32px_rgba(16,185,129,0.1)]' : ''}`}>
+              <div className="flex items-center justify-between">
+                <h3 className="inline-flex items-center gap-2 text-sm font-semibold text-slate-200">
+                  <CloudRain size={16} className="text-emerald-300" />
+                  Texture Layer
+                </h3>
+                <ToggleSwitch
+                  checked={textureLayer.enabled}
+                  onChange={handleTextureToggle}
+                  label="Toggle texture layer"
+                />
+              </div>
+              <select
+                value={textureLayer.type}
+                onChange={(event) => handleTextureTypeChange(event.target.value as TextureType)}
+                className="w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-400"
+              >
+                {TEXTURE_TYPES.map((type) => (
+                  <option key={type.value} value={type.value}>
+                    {type.label}
+                  </option>
+                ))}
+              </select>
+              <ControlSlider
+                label="Level"
+                value={textureLayer.gain}
+                min={0}
+                max={1}
+                step={0.01}
+                readout={`${percentInputValue(textureLayer.gain)}%`}
+                onChange={handleTextureGainChange}
+                tone="emerald"
+              />
+              <ControlSlider
+                label="Tone"
+                value={textureLayer.tone}
+                min={0}
+                max={1}
+                step={0.01}
+                readout={`${percentInputValue(textureLayer.tone)}%`}
+                onChange={handleTextureToneChange}
+                tone="emerald"
+              />
+              <ControlSlider
+                label="Width"
+                value={textureLayer.width}
+                min={0}
+                max={1}
+                step={0.01}
+                readout={`${percentInputValue(textureLayer.width)}%`}
+                onChange={handleTextureWidthChange}
+                tone="emerald"
+              />
+              <ControlSlider
+                label="Motion"
+                value={textureLayer.motion}
+                min={0}
+                max={1}
+                step={0.01}
+                readout={`${percentInputValue(textureLayer.motion)}%`}
+                onChange={handleTextureMotionChange}
+                tone="emerald"
+              />
+            </Card>
+
             <Card className="space-y-3 p-4">
               <h3 className="inline-flex items-center gap-2 text-sm font-semibold text-slate-200">
                 <Boxes size={16} className="text-violet-300" />
@@ -1484,6 +1811,87 @@ export default function Home() {
                 readout={`${masterFX.reverbDecay.toFixed(1)}s`}
                 onChange={handleReverbDecayChange}
                 tone="violet"
+              />
+              <ControlSlider
+                label="Pre-delay"
+                value={masterFX.reverbPreDelay}
+                min={0}
+                max={0.5}
+                step={0.01}
+                readout={`${Math.round(masterFX.reverbPreDelay * 1000)} ms`}
+                onChange={handleReverbPreDelayChange}
+                tone="violet"
+              />
+            </Card>
+
+            <Card className="space-y-3 p-4">
+              <h3 className="inline-flex items-center gap-2 text-sm font-semibold text-slate-200">
+                <Gauge size={16} className="text-cyan-300" />
+                Output Safety
+              </h3>
+              <ControlSlider
+                label="Limiter Ceiling"
+                value={masterFX.limiterThresholdDb}
+                min={-12}
+                max={-0.1}
+                step={0.1}
+                readout={`${masterFX.limiterThresholdDb.toFixed(1)} dB`}
+                onChange={handleLimiterThresholdChange}
+                tone="cyan"
+              />
+              <ControlSlider
+                label="Stereo Width"
+                value={masterFX.stereoWidth}
+                min={0}
+                max={1}
+                step={0.01}
+                readout={`${percentInputValue(masterFX.stereoWidth)}%`}
+                onChange={handleStereoWidthChange}
+                tone="cyan"
+              />
+            </Card>
+
+            <Card className={`space-y-3 p-4 ${masterFX.eqEnabled ? 'border-emerald-400/30 shadow-[0_0_32px_rgba(16,185,129,0.08)]' : ''}`}>
+              <div className="flex items-center justify-between">
+                <h3 className="inline-flex items-center gap-2 text-sm font-semibold text-slate-200">
+                  <SlidersHorizontal size={16} className="text-emerald-300" />
+                  EQ
+                </h3>
+                <ToggleSwitch
+                  checked={masterFX.eqEnabled}
+                  onChange={setEqEnabled}
+                  label="Toggle master EQ"
+                />
+              </div>
+              <ControlSlider
+                label="Low"
+                value={masterFX.eqLowGain}
+                min={-12}
+                max={12}
+                step={0.5}
+                readout={`${masterFX.eqLowGain.toFixed(1)} dB`}
+                onChange={(gain) => handleEqGainChange('low', gain)}
+                tone="emerald"
+              />
+              <ControlSlider
+                label="Mid"
+                value={masterFX.eqMidGain}
+                min={-12}
+                max={12}
+                step={0.5}
+                readout={`${masterFX.eqMidGain.toFixed(1)} dB`}
+                onChange={(gain) => handleEqGainChange('mid', gain)}
+                tone="emerald"
+              />
+              <ControlSlider
+                label="High"
+                value={masterFX.eqHighGain}
+                min={-12}
+                max={12}
+                step={0.5}
+                readout={`${masterFX.eqHighGain.toFixed(1)} dB`}
+                onChange={(gain) => handleEqGainChange('high', gain)}
+                tone="emerald"
               />
             </Card>
 
@@ -1514,21 +1922,167 @@ export default function Home() {
               />
             </Card>
 
+            <Card className={`space-y-3 p-4 ${masterFX.delayEnabled || masterFX.chorusEnabled ? 'border-fuchsia-400/30 shadow-[0_0_32px_rgba(217,70,239,0.08)]' : ''}`}>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1.5">
+                  <span className="text-xs font-semibold text-slate-300">Delay</span>
+                  <ToggleSwitch
+                    checked={masterFX.delayEnabled}
+                    onChange={setDelayEnabled}
+                    label="Toggle delay"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1.5">
+                  <span className="text-xs font-semibold text-slate-300">Chorus</span>
+                  <ToggleSwitch
+                    checked={masterFX.chorusEnabled}
+                    onChange={setChorusEnabled}
+                    label="Toggle chorus"
+                  />
+                </div>
+              </div>
+              <ControlSlider
+                label="Delay Wet"
+                value={masterFX.delayWet}
+                min={0}
+                max={1}
+                step={0.01}
+                readout={`${percentInputValue(masterFX.delayWet)}%`}
+                onChange={handleDelayWetChange}
+                tone="violet"
+              />
+              <ControlSlider
+                label="Delay Time"
+                value={masterFX.delayTime}
+                min={0.01}
+                max={1}
+                step={0.01}
+                readout={`${masterFX.delayTime.toFixed(2)}s`}
+                onChange={handleDelayTimeChange}
+                tone="violet"
+              />
+              <ControlSlider
+                label="Feedback"
+                value={masterFX.delayFeedback}
+                min={0}
+                max={0.9}
+                step={0.01}
+                readout={`${percentInputValue(masterFX.delayFeedback)}%`}
+                onChange={handleDelayFeedbackChange}
+                tone="violet"
+              />
+              <ControlSlider
+                label="Chorus Wet"
+                value={masterFX.chorusWet}
+                min={0}
+                max={1}
+                step={0.01}
+                readout={`${percentInputValue(masterFX.chorusWet)}%`}
+                onChange={handleChorusWetChange}
+                tone="violet"
+              />
+              <ControlSlider
+                label="Chorus Rate"
+                value={masterFX.chorusRate}
+                min={0.05}
+                max={8}
+                step={0.05}
+                readout={`${masterFX.chorusRate.toFixed(2)} Hz`}
+                onChange={handleChorusRateChange}
+                tone="violet"
+              />
+              <ControlSlider
+                label="Chorus Depth"
+                value={masterFX.chorusDepth}
+                min={0}
+                max={1}
+                step={0.01}
+                readout={`${percentInputValue(masterFX.chorusDepth)}%`}
+                onChange={handleChorusDepthChange}
+                tone="violet"
+              />
+            </Card>
+
+            <Card className={`space-y-3 p-4 ${modulation.mode !== 'off' ? 'border-amber-400/30 shadow-[0_0_32px_rgba(251,191,36,0.08)]' : ''}`}>
+              <h3 className="inline-flex items-center gap-2 text-sm font-semibold text-slate-200">
+                <Sparkles size={16} className="text-amber-300" />
+                Modulation
+              </h3>
+              <select
+                value={modulation.mode}
+                onChange={(event) => handleModulationModeChange(event.target.value as ModulationMode)}
+                className="w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none focus:border-amber-400"
+              >
+                {MODULATION_MODES.map((mode) => (
+                  <option key={mode.value} value={mode.value}>
+                    {mode.label}
+                  </option>
+                ))}
+              </select>
+              <ControlSlider
+                label="Rate"
+                value={modulation.rate}
+                min={0.01}
+                max={1}
+                step={0.01}
+                readout={`${modulation.rate.toFixed(2)} Hz`}
+                onChange={handleModulationRateChange}
+                tone="amber"
+              />
+              <ControlSlider
+                label="Depth"
+                value={modulation.depth}
+                min={0}
+                max={1}
+                step={0.01}
+                readout={`${percentInputValue(modulation.depth)}%`}
+                onChange={handleModulationDepthChange}
+                tone="amber"
+              />
+              <div className="grid grid-cols-3 gap-1.5">
+                {[
+                  { key: 'noiseFilter', label: 'Filter' },
+                  { key: 'noiseWidth', label: 'Width' },
+                  { key: 'oscillatorPan', label: 'Pan' },
+                ].map((target) => (
+                  <button
+                    key={target.key}
+                    type="button"
+                    onClick={() =>
+                      handleModulationTargetChange(
+                        target.key as keyof ModulationState['targets'],
+                        !modulation.targets[target.key as keyof ModulationState['targets']]
+                      )
+                    }
+                    aria-pressed={modulation.targets[target.key as keyof ModulationState['targets']]}
+                    className={`rounded-lg border px-2 py-1.5 text-xs font-medium transition ${
+                      modulation.targets[target.key as keyof ModulationState['targets']]
+                        ? 'border-amber-400/40 bg-amber-400/15 text-amber-200'
+                        : 'border-white/10 bg-white/[0.04] text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {target.label}
+                  </button>
+                ))}
+              </div>
+            </Card>
+
             <Card className="p-4">
               <h3 className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-slate-200">
                 <Headphones size={16} className="text-cyan-300" />
                 Signal Chain
               </h3>
-              <div className="grid grid-cols-5 items-start gap-2 text-center text-xs text-slate-400">
+              <div className="grid grid-cols-6 items-start gap-2 text-center text-xs text-slate-400">
                 {[
                   { label: 'Oscillators', icon: AudioWaveform },
                   { label: 'Noise', icon: Waves },
+                  { label: 'Texture', icon: CloudRain },
                   { label: 'Effects', icon: Boxes },
                   { label: 'Limiter', icon: Gauge },
                   { label: 'Output', icon: Headphones },
                 ].map(({ label, icon: Icon }, index) => (
                   <div key={label} className="relative space-y-2">
-                    {index < 4 && (
+                    {index < 5 && (
                       <span className="absolute left-[calc(50%+1.35rem)] top-5 hidden h-px w-[calc(100%-1.35rem)] bg-gradient-to-r from-cyan-400/45 to-violet-400/35 md:block" />
                     )}
                     <div className="mx-auto grid h-10 w-10 place-items-center rounded-xl border border-cyan-400/20 bg-cyan-400/10 text-cyan-300 shadow-[0_0_24px_rgba(34,211,238,0.12)]">
@@ -1548,9 +2102,31 @@ export default function Home() {
               <h2 className="text-sm font-semibold text-slate-100">Oscillator Rack</h2>
               <p className="text-sm text-slate-500">Four tone layers for frequency, gain, pan, waveform, and tremolo.</p>
             </div>
-            <span className="hidden rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-300 md:inline-flex">
-              4 active layers
-            </span>
+            <div className="hidden items-center gap-2 md:flex">
+              <div className="flex rounded-full border border-white/10 bg-slate-950/60 p-1">
+                {[
+                  { value: 'free', label: 'Free' },
+                  { value: 'harmonic', label: 'Harmonic Link' },
+                ].map((mode) => (
+                  <button
+                    key={mode.value}
+                    type="button"
+                    onClick={() => handleFrequencyLinkModeChange(mode.value as FrequencyLinkMode)}
+                    aria-pressed={frequencyLinkMode === mode.value}
+                    className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                      frequencyLinkMode === mode.value
+                        ? 'bg-cyan-400/20 text-cyan-200 shadow-[0_0_18px_rgba(34,211,238,0.18)]'
+                        : 'text-slate-500 hover:text-slate-200'
+                    }`}
+                  >
+                    {mode.label}
+                  </button>
+                ))}
+              </div>
+              <span className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-300">
+                4 active layers
+              </span>
+            </div>
           </div>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
             {oscillators.map((oscillator, index) => (
@@ -1558,23 +2134,34 @@ export default function Home() {
                 key={index}
                 index={index}
                 frequency={oscillator.frequency}
+                detuneCents={oscillator.detuneCents}
                 gain={oscillator.gain}
                 waveform={oscillator.waveform}
                 pan={oscillator.pan}
+                phaseDegrees={oscillator.phaseDegrees}
                 muted={oscillator.muted}
                 soloed={oscillator.soloed}
                 tremoloEnabled={oscillator.tremoloEnabled}
+                tremoloShape={oscillator.tremoloShape}
                 tremoloRate={oscillator.tremoloRate}
                 tremoloDepth={oscillator.tremoloDepth}
+                attackSeconds={oscillator.attackSeconds}
+                releaseSeconds={oscillator.releaseSeconds}
                 onFrequencyChange={(value) => handleFrequencyChange(index, value)}
+                onDetuneChange={(detuneCents) => handleDetuneChange(index, detuneCents)}
                 onGainChange={(gain) => handleGainChange(index, gain)}
                 onWaveformChange={(waveform) => handleWaveformChange(index, waveform)}
                 onPanChange={(pan) => handlePanChange(index, pan)}
+                onPhaseChange={(phaseDegrees) => handlePhaseChange(index, phaseDegrees)}
                 onMuteToggle={(muted) => handleMuteToggle(index, muted)}
                 onSoloToggle={(soloed) => handleSoloToggle(index, soloed)}
                 onTremoloToggle={(enabled) => handleTremoloToggle(index, enabled)}
+                onTremoloShapeChange={(shape) => handleTremoloShapeChange(index, shape)}
                 onTremoloRateChange={(rate) => handleTremoloRateChange(index, rate)}
                 onTremoloDepthChange={(depth) => handleTremoloDepthChange(index, depth)}
+                onEnvelopeChange={(attackSeconds, releaseSeconds) =>
+                  handleEnvelopeChange(index, attackSeconds, releaseSeconds)
+                }
               />
             ))}
           </div>
@@ -1625,6 +2212,135 @@ export default function Home() {
             </div>
           </div>
 
+          <div className="mb-4 flex flex-wrap gap-2">
+            {PRESET_CATEGORY_OPTIONS.map((category) => {
+              const isActiveCategory = presetCategory === category.value;
+
+              return (
+                <button
+                  key={category.value}
+                  type="button"
+                  onClick={() => setPresetCategory(category.value)}
+                  aria-pressed={isActiveCategory}
+                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                    isActiveCategory
+                      ? 'border-cyan-400/45 bg-cyan-400/15 text-cyan-100 shadow-[0_0_22px_rgba(34,211,238,0.1)]'
+                      : 'border-white/10 bg-white/[0.04] text-slate-400 hover:border-cyan-400/30 hover:text-slate-200'
+                  }`}
+                >
+                  {category.label}
+                  <span className="font-mono text-[10px] opacity-70">
+                    {presetCategoryCounts[category.value] ?? 0}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mb-5 grid gap-4 rounded-2xl border border-white/10 bg-slate-950/35 p-4 lg:grid-cols-[1fr_1fr_auto]">
+            <div className="grid gap-3 sm:grid-cols-2 lg:col-span-2 xl:grid-cols-3">
+              <label className="block text-xs text-slate-500">
+                Creator Title
+                <input
+                  type="text"
+                  value={creatorSession.title}
+                  onChange={(event) => handleCreatorFieldChange('title', event.target.value)}
+                  placeholder={currentPresetName}
+                  className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-cyan-400"
+                />
+              </label>
+              <label className="block text-xs text-slate-500">
+                Purpose
+                <input
+                  type="text"
+                  value={creatorSession.purpose}
+                  onChange={(event) => handleCreatorFieldChange('purpose', event.target.value)}
+                  className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-cyan-400"
+                />
+              </label>
+              <label className="block text-xs text-slate-500">
+                Target Duration
+                <div className="mt-1.5 flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="1"
+                    max="720"
+                    step="1"
+                    value={numberInputValue(creatorSession.durationMinutes)}
+                    onChange={(event) => {
+                      const parsedValue = parseFloat(event.target.value);
+
+                      if (!Number.isNaN(parsedValue)) {
+                        handleCreatorFieldChange('durationMinutes', parsedValue);
+                      }
+                    }}
+                    className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-cyan-400"
+                    aria-label="Creator target duration in minutes"
+                  />
+                  <span className="text-xs text-slate-500">min</span>
+                </div>
+              </label>
+              <label className="block text-xs text-slate-500">
+                Filename Stem
+                <input
+                  type="text"
+                  value={creatorSession.exportSlug}
+                  onChange={(event) => handleCreatorFieldChange('exportSlug', event.target.value)}
+                  placeholder={creatorDraft.fileNameStem}
+                  className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-cyan-400"
+                />
+              </label>
+              <label className="block text-xs text-slate-500">
+                Visual Theme
+                <input
+                  type="text"
+                  value={creatorSession.visualTheme}
+                  onChange={(event) => handleCreatorFieldChange('visualTheme', event.target.value)}
+                  className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-cyan-400"
+                />
+              </label>
+              <label className="block text-xs text-slate-500">
+                Session Notes
+                <input
+                  type="text"
+                  value={creatorSession.notes}
+                  onChange={(event) => handleCreatorFieldChange('notes', event.target.value)}
+                  placeholder="Optional export notes..."
+                  className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-cyan-400"
+                />
+              </label>
+              <label className="block text-xs text-slate-500 xl:col-span-3">
+                Storyboard Notes
+                <input
+                  type="text"
+                  value={creatorSession.storyboardNotes}
+                  onChange={(event) => handleCreatorFieldChange('storyboardNotes', event.target.value)}
+                  placeholder="Optional visualizer/camera notes for long-form capture..."
+                  className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-cyan-400"
+                />
+              </label>
+            </div>
+            <div className="flex flex-col justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-slate-200">Creator Session</p>
+                <p className="mt-1 max-w-xs text-xs leading-5 text-slate-500">
+                  {creatorDraft.title} · {creatorDraft.durationLabel}
+                </p>
+                <p className="mt-1 max-w-xs break-all font-mono text-[11px] text-cyan-300">
+                  {creatorDraft.fileNameStem}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleCopyCreatorDraft}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-400/25 bg-cyan-400/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/15"
+              >
+                <Copy size={15} />
+                Copy Notes
+              </button>
+            </div>
+          </div>
+
           {filteredPresets.length > 0 ? (
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
               {filteredPresets.map((preset) => {
@@ -1651,6 +2367,11 @@ export default function Home() {
                           >
                             <Headphones size={10} />
                             Phones
+                          </span>
+                        )}
+                        {preset.exportReady && (
+                          <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-300">
+                            Export
                           </span>
                         )}
                       </div>
@@ -1709,7 +2430,9 @@ export default function Home() {
             <p className="text-sm text-slate-500">
               {presetSearch.trim()
                 ? 'No presets match that search.'
-                : 'No presets saved yet. Create a soundscape and save it.'}
+                : presetCategory !== 'all'
+                  ? 'No presets match this category yet.'
+                  : 'No presets saved yet. Create a soundscape and save it.'}
             </p>
           )}
         </GlassPanel>

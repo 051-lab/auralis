@@ -20,6 +20,19 @@ Highest-priority next audio tasks are tracked in detail in
 - [x] [P1] Add per-oscillator mute/solo controls.
 - [x] [P1] Add filtered noise controls.
 - [x] [P1] Add preset metadata and responsible descriptions.
+- [x] [P1] Add bounded modulation and movement controls.
+- [x] [P1] Add procedural texture layer controls.
+- [x] [P1] Add creator-session notes for export prep.
+- [ ] [P1] Owner QA: complete manual listening review for all built-in presets with output meter after texture/modulation additions.
+- [x] [P1] Add automated code-level preset QA for metadata, gain ranges, and binaural movement.
+- [x] [P2] Add detune, phase, tremolo-shape, and envelope controls.
+- [x] [P2] Add harmonic frequency-link mode.
+- [x] [P2] Add limiter ceiling, EQ, stereo width, delay, chorus, and reverb pre-delay controls.
+- [x] [P2] Add export-ready preset metadata.
+- [x] [P2] Add original research notes distilled from the audio knowledge base.
+- [x] [P2] Add duration/export naming helpers for YouTube-style session production.
+- [x] [P2] Add preset category/search filters for sleep, focus, meditation-style, ambience, and drone sessions.
+- [x] [P2] Add browser smoke tests for modulation and texture controls.
 
 ---
 

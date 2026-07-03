@@ -80,8 +80,10 @@ npm run lint     # Run Next.js linting
 
 The audio-side planning docs live in `docs/audio/`:
 
+- [Development Roadmap](docs/DEVELOPMENT_ROADMAP.md)
 - [Audio Architecture Audit](docs/audio/AUDIO_ARCHITECTURE_AUDIT.md)
 - [Reading Roadmap](docs/audio/READING_ROADMAP.md)
+- [Research Implementation Notes](docs/audio/RESEARCH_IMPLEMENTATION_NOTES.md)
 - [Audio Improvement Backlog](docs/audio/AUDIO_IMPROVEMENT_BACKLOG.md)
 - [Preset Design Guide](docs/audio/PRESET_DESIGN_GUIDE.md)
 - [Responsible Audio Guidelines](docs/audio/RESPONSIBLE_AUDIO_GUIDELINES.md)

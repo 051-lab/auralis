@@ -2,6 +2,34 @@
 
 This is the recommended engineering playbook for the next coding pass. The goal is to improve audio quality, safety, and preset usefulness without rewriting the full engine.
 
+## Current Post-Metering Priorities
+
+Status: Updated after the modulation, texture layer, creator-session, oscillator-advanced, and master-chain expansion pass.
+
+Next recommended tasks:
+
+1. Owner QA: review every built-in preset with the output meter while modulation and texture layers are active.
+2. Owner QA: capture subjective notes for loudness, brightness, width, and motion comfort.
+3. Design a separate HRTF/3D spatial experiment before any implementation.
+4. Keep adding presets only after listening review confirms current gain targets.
+5. Treat further UI work as micro-polish only unless testing finds a concrete issue.
+
+Implemented in the latest audio expansion:
+
+- Preset-safe modulation state and a bounded engine modulation loop.
+- Texture Layer with rain, storm, wind, ocean, and drone profiles.
+- Creator-session metadata saved/shared with presets.
+- Copyable creator export notes with responsible-use language.
+- Target duration and export filename stems for long-form session production.
+- Original research implementation notes under `docs/audio/RESEARCH_IMPLEMENTATION_NOTES.md`.
+- Automated preset QA for metadata, gain range, and binaural movement conflicts.
+- Detune, phase, tremolo-shape, attack, and release controls.
+- Harmonic frequency-link mode for oscillator stacks.
+- User-selectable limiter ceiling.
+- Master EQ, stereo width, delay, chorus, and reverb pre-delay controls.
+- Export-ready preset metadata.
+- Playwright smoke tests for the main dashboard controls.
+
 ## 1. Add Output Metering and Limiter Feedback
 
 Status: Implemented.

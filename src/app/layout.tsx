@@ -12,8 +12,8 @@ const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 export const metadata: Metadata = {
   metadataBase: new URL(appUrl),
   title: 'Auralis - Somatic Frequency Generator & Binaural Entrainment',
-  description: 'Professional browser-based frequency generator with binaural beats, ambient noise layers, and real-time visualization. Nervous system regulation through high-fidelity sound.',
-  keywords: ['binaural beats', 'frequency generator', 'somatic healing', 'meditation', 'sound therapy', 'brainwave entrainment'],
+  description: 'Professional browser-based frequency generator with binaural-inspired presets, ambient noise layers, texture controls, and real-time visualization.',
+  keywords: ['binaural beats', 'frequency generator', 'ambient audio', 'meditation audio', 'focus audio', 'brainwave entrainment'],
   authors: [{ name: 'Auralis Team' }],
   creator: 'Auralis',
   openGraph: {
