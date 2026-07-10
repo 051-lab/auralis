@@ -41,6 +41,7 @@ import {
   useAuralisStore,
 } from '@/store/useAuralisStore';
 import type {
+  ActivePresetIdentity,
   CreatorSessionState,
   MasterFXState,
   ModulationState,
@@ -141,6 +142,7 @@ type BinauralSessionSnapshot = {
   noiseEnabled: boolean;
   modulation: ModulationState;
   textureLayer: TextureLayerState;
+  activePresetIdentity: ActivePresetIdentity;
 };
 
 type FrequencyLinkMode = 'free' | 'harmonic';
@@ -217,6 +219,10 @@ export default function Home() {
     isBinauralMode,
     binauralPreset,
     presets,
+    activePresetId,
+    activePresetName,
+    activePresetSource,
+    isActivePresetModified,
     timerDuration,
     timerRemaining,
     isRecording,
@@ -285,6 +291,8 @@ export default function Home() {
     setTextureLayerMotion,
     setCreatorSessionField,
     applySharedPreset,
+    markActivePresetModified,
+    setActivePresetIdentity,
   } = useAuralisStore();
 
   const isAudible = isAudiblePlayback(isPlaying, isFadingOut);
@@ -705,6 +713,8 @@ export default function Home() {
         setOscillatorFrequency(ratioIndex + 1, clampNumber(freq * ratio, 20, 20000));
       });
     }
+
+    markActivePresetModified();
   };
 
   const handleFrequencyLinkModeChange = (mode: FrequencyLinkMode) => {
@@ -716,51 +726,63 @@ export default function Home() {
       [2, 3, 4].forEach((ratio, ratioIndex) => {
         setOscillatorFrequency(ratioIndex + 1, clampNumber(baseFrequency * ratio, 20, 20000));
       });
+      markActivePresetModified();
     }
   };
 
   const handleDetuneChange = (index: number, detuneCents: number) => {
     setOscillatorDetune(index, detuneCents);
+    markActivePresetModified();
   };
 
   const handleGainChange = (index: number, gain: number) => {
     setOscillatorGain(index, gain);
+    markActivePresetModified();
   };
 
   const handleWaveformChange = (index: number, waveform: WaveformType) => {
     setOscillatorWaveform(index, waveform);
+    markActivePresetModified();
   };
 
   const handlePanChange = (index: number, pan: number) => {
     setOscillatorPan(index, pan);
+    markActivePresetModified();
   };
 
   const handlePhaseChange = (index: number, phaseDegrees: number) => {
     setOscillatorPhase(index, phaseDegrees);
+    markActivePresetModified();
   };
 
   const handleMuteToggle = (index: number, muted: boolean) => {
     setOscillatorMuted(index, muted);
+    markActivePresetModified();
   };
 
   const handleSoloToggle = (index: number, soloed: boolean) => {
     setOscillatorSoloed(index, soloed);
+    markActivePresetModified();
   };
 
   const handleTremoloToggle = (index: number, enabled: boolean) => {
     setOscillatorTremoloEnabled(index, enabled);
+    markActivePresetModified();
   };
 
   const handleTremoloShapeChange = (index: number, shape: WaveformType) => {
     setOscillatorTremoloShape(index, shape);
+    markActivePresetModified();
   };
 
   const handleTremoloRateChange = (index: number, rate: number) => {
     setOscillatorTremoloRate(index, rate);
+    markActivePresetModified();
   };
 
   const handleTremoloDepthChange = (index: number, depth: number) => {
     setOscillatorTremoloDepth(index, depth);
+    markActivePresetModified();
   };
 
   const handleEnvelopeChange = (
@@ -769,72 +791,104 @@ export default function Home() {
     releaseSeconds: number
   ) => {
     setOscillatorEnvelope(index, attackSeconds, releaseSeconds);
+    markActivePresetModified();
   };
 
   const handleMasterVolumeChange = (volume: number) => {
     setMasterVolume(volume);
+    markActivePresetModified();
   };
 
   const handleLimiterThresholdChange = (thresholdDb: number) => {
     setLimiterThreshold(thresholdDb);
+    markActivePresetModified();
   };
 
   const handleReverbChange = (wet: number) => {
     setReverbWet(wet);
+    markActivePresetModified();
   };
 
   const handleReverbDecayChange = (decay: number) => {
     setReverbDecay(decay);
+    markActivePresetModified();
   };
 
   const handleReverbPreDelayChange = (preDelay: number) => {
     setReverbPreDelay(preDelay);
+    markActivePresetModified();
   };
 
   const handleAutoPannerRateChange = (rate: number) => {
     setAutoPannerRate(rate);
+    markActivePresetModified();
   };
 
   const handleAutoPannerDepthChange = (depth: number) => {
     setAutoPannerDepth(depth);
+    markActivePresetModified();
+  };
+
+  const handleEqEnabledChange = (enabled: boolean) => {
+    setEqEnabled(enabled);
+    markActivePresetModified();
   };
 
   const handleEqGainChange = (band: 'low' | 'mid' | 'high', gain: number) => {
     setEqGain(band, gain);
+    markActivePresetModified();
   };
 
   const handleStereoWidthChange = (width: number) => {
     setStereoWidth(width);
+    markActivePresetModified();
+  };
+
+  const handleDelayEnabledChange = (enabled: boolean) => {
+    setDelayEnabled(enabled);
+    markActivePresetModified();
   };
 
   const handleDelayWetChange = (wet: number) => {
     setDelayWet(wet);
+    markActivePresetModified();
   };
 
   const handleDelayTimeChange = (time: number) => {
     setDelayTime(time);
+    markActivePresetModified();
   };
 
   const handleDelayFeedbackChange = (feedback: number) => {
     setDelayFeedback(feedback);
+    markActivePresetModified();
+  };
+
+  const handleChorusEnabledChange = (enabled: boolean) => {
+    setChorusEnabled(enabled);
+    markActivePresetModified();
   };
 
   const handleChorusWetChange = (wet: number) => {
     setChorusWet(wet);
+    markActivePresetModified();
   };
 
   const handleChorusRateChange = (rate: number) => {
     setChorusRate(rate);
+    markActivePresetModified();
   };
 
   const handleChorusDepthChange = (depth: number) => {
     setChorusDepth(depth);
+    markActivePresetModified();
   };
 
   const handleNoiseToggle = (enabled: boolean) => {
     const activeEngine = ensureEngine();
 
     setNoiseEnabled(enabled);
+    markActivePresetModified();
 
     if (enabled && isPlaying && noiseGain > 0) {
       activeEngine.startNoise();
@@ -845,34 +899,42 @@ export default function Home() {
 
   const handleNoiseTypeChange = (type: NoiseType) => {
     setNoiseType(type);
+    markActivePresetModified();
   };
 
   const handleNoiseGainChange = (gain: number) => {
     setNoiseGain(gain);
+    markActivePresetModified();
   };
 
   const handleNoiseHighpassChange = (frequency: number) => {
     setNoiseHighpassFrequency(frequency);
+    markActivePresetModified();
   };
 
   const handleNoiseLowpassChange = (frequency: number) => {
     setNoiseLowpassFrequency(frequency);
+    markActivePresetModified();
   };
 
   const handleNoiseStereoWidthChange = (width: number) => {
     setNoiseStereoWidth(width);
+    markActivePresetModified();
   };
 
   const handleModulationModeChange = (mode: ModulationMode) => {
     setModulationMode(mode);
+    markActivePresetModified();
   };
 
   const handleModulationRateChange = (rate: number) => {
     setModulationRate(rate);
+    markActivePresetModified();
   };
 
   const handleModulationDepthChange = (depth: number) => {
     setModulationDepth(depth);
+    markActivePresetModified();
   };
 
   const handleModulationTargetChange = (
@@ -880,30 +942,37 @@ export default function Home() {
     enabled: boolean
   ) => {
     setModulationTarget(target, enabled);
+    markActivePresetModified();
   };
 
   const handleTextureToggle = (enabled: boolean) => {
     setTextureLayerEnabled(enabled);
+    markActivePresetModified();
   };
 
   const handleTextureTypeChange = (type: TextureType) => {
     setTextureLayerType(type);
+    markActivePresetModified();
   };
 
   const handleTextureGainChange = (gain: number) => {
     setTextureLayerGain(gain);
+    markActivePresetModified();
   };
 
   const handleTextureToneChange = (tone: number) => {
     setTextureLayerTone(tone);
+    markActivePresetModified();
   };
 
   const handleTextureWidthChange = (width: number) => {
     setTextureLayerWidth(width);
+    markActivePresetModified();
   };
 
   const handleTextureMotionChange = (motion: number) => {
     setTextureLayerMotion(motion);
+    markActivePresetModified();
   };
 
   const handleCreatorFieldChange = (
@@ -911,6 +980,7 @@ export default function Home() {
     value: string | number
   ) => {
     setCreatorSessionField(field, value);
+    markActivePresetModified();
   };
 
   const handlePercentInputChange = (
@@ -925,7 +995,7 @@ export default function Home() {
 
   const startBinaural = (baseFreq: number, beatFreq: number, label?: string) => {
     const pair = createBinauralPair(baseFreq, beatFreq);
-    const activePresetName =
+    const binauralSessionName =
       label ?? BINAURAL_PRESETS.find((preset) => preset.freq === pair.beatFrequency)?.name ?? 'Custom';
     const adjustmentNote =
       pair.baseAdjusted || pair.beatAdjusted
@@ -941,7 +1011,14 @@ export default function Home() {
         targets: { ...modulation.targets },
       },
       textureLayer: { ...textureLayer },
+      activePresetIdentity: {
+        id: activePresetId,
+        name: activePresetName,
+        source: activePresetSource,
+        modified: isActivePresetModified,
+      },
     };
+    markActivePresetModified();
     setBinauralMode(
       true,
       `${formatBinauralNumber(pair.baseFrequency)}Hz + ${formatBinauralNumber(pair.beatFrequency)}Hz`
@@ -983,9 +1060,9 @@ export default function Home() {
     setOscillatorGain(3, 0);
     setOscillatorTremoloEnabled(3, false);
 
-    analytics.trackBinauralActivate(activePresetName, pair.beatFrequency);
+    analytics.trackBinauralActivate(binauralSessionName, pair.beatFrequency);
     setStatusMessage(
-      `Binaural mode activated: ${activePresetName} (${pair.guidance.label}).${adjustmentNote} ${pair.guidance.caution} Strict carrier lock bypasses effects, movement, noise, and textures until exit.`
+      `Binaural mode activated: ${binauralSessionName} (${pair.guidance.label}).${adjustmentNote} ${pair.guidance.caution} Strict carrier lock bypasses effects, movement, noise, and textures until exit.`
     );
   };
 
@@ -1076,6 +1153,7 @@ export default function Home() {
       setTextureLayerWidth(snapshot.textureLayer.width);
       setTextureLayerMotion(snapshot.textureLayer.motion);
       setTextureLayerEnabled(snapshot.textureLayer.enabled);
+      setActivePresetIdentity(snapshot.activePresetIdentity);
       binauralSnapshotRef.current = null;
     }
 
@@ -1202,7 +1280,9 @@ export default function Home() {
     }
   };
 
-  const currentPreset = presets[0];
+  const currentPreset = activePresetId
+    ? presets.find((preset) => preset.id === activePresetId)
+    : undefined;
   const activeStatus = getPlaybackStatus(isPlaying, isFadingOut);
   const remainingLabel = timerRemaining !== null ? formatTime(timerRemaining) : '--:--';
   const builtInPresetCount = presets.filter((preset) => preset.id.startsWith('built-in-')).length;
@@ -1225,7 +1305,10 @@ export default function Home() {
       ? BINAURAL_PRESETS.find((preset) => preset.freq === pendingBinauralPair.beatFrequency)
           ?.name ?? 'Custom'
       : null);
-  const currentPresetName = currentPreset?.name ?? 'Manual Session';
+  const currentPresetName = activePresetName ?? 'Manual Session';
+  const currentPresetDisplayName = isActivePresetModified
+    ? `${currentPresetName} · Modified`
+    : currentPresetName;
   const creatorDraft = buildCreatorExportDraft({
     creatorSession,
     presetName: currentPresetName,
@@ -1390,7 +1473,7 @@ export default function Home() {
                   <Moon size={28} className="text-violet-200" />
                 </div>
                 <div>
-                  <p className="font-semibold text-slate-100">{currentPreset?.name ?? 'Manual Session'}</p>
+                  <p className="font-semibold text-slate-100">{currentPresetDisplayName}</p>
                   <p className="text-xs text-cyan-300">{builtInPresetCount} built-in presets</p>
                 </div>
               </div>
@@ -1930,7 +2013,7 @@ export default function Home() {
                 </h3>
                 <ToggleSwitch
                   checked={masterFX.eqEnabled}
-                  onChange={setEqEnabled}
+                  onChange={handleEqEnabledChange}
                   label="Toggle master EQ"
                 />
               </div>
@@ -1999,7 +2082,7 @@ export default function Home() {
                   <span className="text-xs font-semibold text-slate-300">Delay</span>
                   <ToggleSwitch
                     checked={masterFX.delayEnabled}
-                    onChange={setDelayEnabled}
+                    onChange={handleDelayEnabledChange}
                     label="Toggle delay"
                   />
                 </div>
@@ -2007,7 +2090,7 @@ export default function Home() {
                   <span className="text-xs font-semibold text-slate-300">Chorus</span>
                   <ToggleSwitch
                     checked={masterFX.chorusEnabled}
-                    onChange={setChorusEnabled}
+                    onChange={handleChorusEnabledChange}
                     label="Toggle chorus"
                   />
                 </div>

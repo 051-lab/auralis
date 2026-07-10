@@ -11,6 +11,7 @@ import {
   normalizeOscillators,
   normalizePresetTags,
   normalizeTextureLayer,
+  useAuralisStore,
 } from './useAuralisStore';
 
 describe('store normalization', () => {
@@ -186,5 +187,29 @@ describe('store normalization', () => {
 
   it('exposes the current preset version', () => {
     expect(CURRENT_PRESET_VERSION).toBe(2);
+  });
+
+  it('tracks loaded preset identity and modified state', () => {
+    const store = useAuralisStore.getState();
+
+    store.loadPreset('built-in-alpha-relaxed-focus-10hz');
+
+    expect(useAuralisStore.getState()).toMatchObject({
+      activePresetId: 'built-in-alpha-relaxed-focus-10hz',
+      activePresetName: 'Alpha Relaxed Focus (10Hz)',
+      activePresetSource: 'built-in',
+      isActivePresetModified: false,
+    });
+
+    useAuralisStore.getState().markActivePresetModified();
+    expect(useAuralisStore.getState().isActivePresetModified).toBe(true);
+
+    useAuralisStore.getState().resetToDefaults();
+    expect(useAuralisStore.getState()).toMatchObject({
+      activePresetId: null,
+      activePresetName: null,
+      activePresetSource: null,
+      isActivePresetModified: false,
+    });
   });
 });

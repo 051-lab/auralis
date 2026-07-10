@@ -124,12 +124,25 @@ export interface Preset {
   createdAt: number;
 }
 
+export type ActivePresetSource = 'built-in' | 'user' | 'shared';
+
+export interface ActivePresetIdentity {
+  id: string | null;
+  name: string | null;
+  source: ActivePresetSource | null;
+  modified: boolean;
+}
+
 interface AuralisState {
   oscillators: OscillatorState[];
   masterFX: MasterFXState;
   isBinauralMode: boolean;
   binauralPreset: string | null;
   presets: Preset[];
+  activePresetId: string | null;
+  activePresetName: string | null;
+  activePresetSource: ActivePresetSource | null;
+  isActivePresetModified: boolean;
   timerDuration: number | null;
   timerRemaining: number | null;
   isRecording: boolean;
@@ -199,6 +212,8 @@ interface AuralisState {
   loadPreset: (id: string) => void;
   deletePreset: (id: string) => void;
   applySharedPreset: (payload: SharedPresetPayload) => void;
+  markActivePresetModified: () => void;
+  setActivePresetIdentity: (identity: ActivePresetIdentity) => void;
   resetToDefaults: () => void;
 }
 
@@ -1124,6 +1139,10 @@ export const useAuralisStore = create<AuralisState>()(
       isBinauralMode: false,
       binauralPreset: null,
       presets: mergePresets(),
+      activePresetId: null,
+      activePresetName: null,
+      activePresetSource: null,
+      isActivePresetModified: false,
       timerDuration: null,
       timerRemaining: null,
       isRecording: false,
@@ -1634,6 +1653,10 @@ export const useAuralisStore = create<AuralisState>()(
             newPreset,
             ...normalizeUserPresets(currentState.presets),
           ].slice(0, builtInPresets.length + MAX_USER_PRESETS),
+          activePresetId: newPreset.id,
+          activePresetName: newPreset.name,
+          activePresetSource: 'user',
+          isActivePresetModified: false,
         }));
       },
 
@@ -1657,15 +1680,31 @@ export const useAuralisStore = create<AuralisState>()(
           creatorSession: normalizeCreatorSession(preset.creatorSession),
           isBinauralMode: false,
           binauralPreset: null,
+          activePresetId: preset.id,
+          activePresetName: preset.name,
+          activePresetSource: preset.id.startsWith('built-in-') ? 'built-in' : 'user',
+          isActivePresetModified: false,
         });
       },
 
       deletePreset: (id) =>
-        set((state) => ({
-          presets: id.startsWith('built-in-')
-            ? state.presets
-            : state.presets.filter((preset) => preset.id !== id),
-        })),
+        set((state) => {
+          if (id.startsWith('built-in-')) return state;
+
+          const deletingActivePreset = state.activePresetId === id;
+
+          return {
+            presets: state.presets.filter((preset) => preset.id !== id),
+            ...(deletingActivePreset
+              ? {
+                  activePresetId: null,
+                  activePresetName: null,
+                  activePresetSource: null,
+                  isActivePresetModified: false,
+                }
+              : {}),
+          };
+        }),
 
       applySharedPreset: (payload) => {
         set({
@@ -1689,8 +1728,30 @@ export const useAuralisStore = create<AuralisState>()(
             typeof payload.isBinauralMode === 'boolean' ? payload.isBinauralMode : false,
           binauralPreset:
             typeof payload.binauralPreset === 'string' ? payload.binauralPreset : null,
+          activePresetId: null,
+          activePresetName:
+            typeof payload.name === 'string' && payload.name.trim()
+              ? payload.name.trim().slice(0, MAX_PRESET_NAME_LENGTH)
+              : 'Shared Preset',
+          activePresetSource: 'shared',
+          isActivePresetModified: false,
         });
       },
+
+      markActivePresetModified: () =>
+        set((state) => ({
+          isActivePresetModified: state.activePresetName
+            ? true
+            : state.isActivePresetModified,
+        })),
+
+      setActivePresetIdentity: (identity) =>
+        set({
+          activePresetId: identity.id,
+          activePresetName: identity.name,
+          activePresetSource: identity.source,
+          isActivePresetModified: identity.modified,
+        }),
 
       resetToDefaults: () =>
         set({
@@ -1711,6 +1772,10 @@ export const useAuralisStore = create<AuralisState>()(
           textureLayer: cloneTextureLayer(defaultTextureLayer),
           creatorSession: cloneCreatorSession(defaultCreatorSession),
           presets: mergePresets(get().presets),
+          activePresetId: null,
+          activePresetName: null,
+          activePresetSource: null,
+          isActivePresetModified: false,
         }),
     }),
     {
