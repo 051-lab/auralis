@@ -156,8 +156,15 @@ Status: Complete for the current pass.
 
 Status: Complete.
 
-- Add Playwright smoke tests once the audio feature set stabilizes.
-- Cover start/stop, timer fade, preset load/share, recording/export, modulation controls, and texture controls.
+- Eleven Playwright workflows cover dashboard rendering, start/stop, timer behavior, preset load/share and active identity, recording/pending export, strict binaural mode, modulation/texture controls, and mobile rack behavior.
+
+### Chunk 7.3 - Type And Dependency Baseline
+
+Status: Complete for the current pass.
+
+- Next.js 16.2.10 and ESLint 9 are the supported baseline.
+- CI runs lint, generated-route TypeScript checks, unit tests, production build, and Playwright.
+- The remaining moderate PostCSS advisory is documented in `docs/SECURITY_NOTES.md`; the npm forced fix is an incompatible Next.js downgrade.
 
 ## Low-Priority UI Polish
 

@@ -41,8 +41,13 @@ masterGain
   -> transportFade
   -> Reverb
   -> AutoPanner
+  -> EQ
+  -> Delay
+  -> Chorus
+  -> StereoWidener
+  -> Pre-limiter Analyser
   -> Limiter
-  -> Analyser
+  -> Post-limiter Analyser
   -> Tone.Destination
 
 transportFade -> dryRecorderLimiter -> dryRecorder
@@ -55,7 +60,7 @@ Important implementation details:
 - Audio starts only after a user gesture via `Tone.start()`.
 - Oscillator source nodes are started once, then output is controlled by gain and fade nodes.
 - Texture sources are started once on demand, then controlled through a dedicated texture gain stage.
-- A `Tone.Limiter(-1)` is already in the wet output path before analyser, destination, and wet recording.
+- A configurable `Tone.Limiter` is in the wet output path between pre/post analysers and before destination and wet recording.
 - Dry recording taps the chain at `transportFade`, before reverb, auto-panner, analyser, and destination, then passes through a dedicated `Tone.Limiter(-1)` before the dry recorder.
 
 ## Current Oscillator Behavior
@@ -290,7 +295,7 @@ Risks:
 The main post-master chain is fixed-order:
 
 ```text
-masterGain -> userVolume -> transportFade -> Reverb -> AutoPanner -> EQ -> Delay -> Chorus -> StereoWidener -> Limiter -> Analyser -> Destination
+masterGain -> userVolume -> transportFade -> Reverb -> AutoPanner -> EQ -> Delay -> Chorus -> StereoWidener -> PreAnalyser -> Limiter -> PostAnalyser -> Destination
 ```
 
 The dry recorder taps `transportFade` before these wet/master effects, then passes through its own limiter.
@@ -341,7 +346,7 @@ Risks:
 
 ## Current Analyser and Visualizer Relationship
 
-The analyser is a `Tone.Analyser('waveform', 2048)` connected after the limiter. The visualizer reads from `getAudioEngine().getAnalyser().getValue()` only when active.
+Matching waveform analysers sit immediately before and after the limiter. The output meter calculates input peak, output peak, output RMS, and reads `Tone.Limiter.reduction` for measured gain reduction. The visualizer reads the post-limiter analyser through `getAudioEngine().getAnalyser()` while audio is active.
 
 The visualizer also renders an idle animated fallback when audio is stopped.
 
@@ -352,8 +357,8 @@ Strengths:
 
 Risks:
 
-- The analyser is not tested.
-- Output metering is analyser-based and not true-peak calibrated.
+- Meter math, safe defaults, and threshold classification are unit-tested.
+- Output metering is sample-window based and not true-peak or loudness calibrated.
 - The visualizer may imply more signal detail than it actually measures because it uses a stylized rendering.
 
 ## Current Recording and Export Path
@@ -376,11 +381,13 @@ Strengths:
 - WAV export is generated locally in the browser.
 - Recording requires playback to be active.
 - Both wet and dry recorder paths are safety-limited.
+- Playback/timer stop captures the audible fade tail and creates a pending export that can be downloaded or discarded.
+- Explicit recorder stop finalizes immediately, and finalization is guarded against duplicate calls.
 
 Risks:
 
 - WAV conversion relies on browser decode support for the source recording format.
-- There are no tests for WAV encoding, recorder state, or browser compatibility.
+- WAV encoding helpers and browser recording workflows have automated coverage, although codec/decode support still requires target-browser checks.
 - Recording is controlled from page state, while the engine also tracks recorder state; this is workable but needs careful future changes.
 
 ## Current Preset and State Flow
@@ -394,6 +401,7 @@ Zustand owns the main audio state:
 - Timer state
 - Recording flag
 - Presets
+- Active preset identity, source, and modified status
 
 The store persists only presets. Runtime controls reset to defaults on reload, while user presets remain available.
 
@@ -405,6 +413,7 @@ Preset flows:
 - User presets are capped.
 - Shared presets use compressed URL encoding.
 - Incoming presets are normalized and clamped before application.
+- Loading a built-in, user, or shared preset establishes its identity; subsequent audio edits mark it modified.
 
 Strengths:
 
@@ -416,14 +425,14 @@ Risks:
 
 - Preset metadata is intentionally concise, so richer session notes may need a future detail view.
 - Presets now store descriptions, intended use, headphone recommendations, caution copy, and tags.
-- No explicit migration function exists beyond normalization and merging behavior.
+- Versioned normalization and migration protect older persisted/shared payloads.
 
 ## Strengths of the Current Implementation
 
 - Clear Tone.js graph with separable oscillators, noise, texture, FX, analyser, and recorder.
 - Safe clamping for frequency, gain, pan, tremolo, noise, texture, modulation, and master FX values.
 - Master volume and limiter are already present.
-- Binaural activation makes a real hard-left/hard-right pair and suppresses stereo-smearing FX.
+- Strict binaural activation snapshots all affected state, isolates a sine carrier pair hard left/right, bypasses ambience/movement paths, locks conflicting controls, and restores the snapshot on exit.
 - Start/stop and timer completion use cancellable fades with a visible `Fading` state.
 - Store normalization and share encoding have unit tests.
 - Visualizer reads from the final wet path after limiting.
@@ -431,19 +440,19 @@ Risks:
 
 ## Risks or Fragile Areas
 
-- Limiter activity is inferred from post-limiter output level rather than direct gain-reduction telemetry.
+- Metering is not mastering-grade true-peak or integrated-loudness measurement.
 - Dry export is safety-limited but still bypasses wet FX by design.
 - Reverb regeneration can become a performance or UX concern.
 - Binaural mode relies on user headphone setup and responsible copy.
 - Texture and modulation now exist, but their preset defaults need systematic listening review.
-- Audio graph behavior has little direct automated test coverage.
+- Web Audio sound quality remains partly dependent on manual browser/device listening despite utility and browser workflow coverage.
 - Presets now carry responsible-use metadata, but future preset work may need richer browsing and detail views.
 - Some important audio behaviors are embedded in `page.tsx`, making future audio feature expansion harder.
 
 ## Immediate Improvement Opportunities
 
 1. Review all built-in presets with the output meter after texture/modulation additions.
-2. Add export helper tests for WAV encoding and browser compatibility behavior.
-3. Add richer preset browsing/detail views if the metadata outgrows compact cards.
-4. Keep binaural language conservative: "designed around" or "inspired by", not "causes" or "treats".
-5. Add original research notes from the knowledge base without copying copyrighted source content.
+2. Complete target-browser and device checks for recording codecs and WAV conversion.
+3. Design HRTF/3D spatial experiments separately before changing the production graph.
+4. Add richer preset browsing/detail views only if the metadata outgrows compact cards.
+5. Keep binaural language conservative: "designed around" or "inspired by", not "causes" or "treats".

@@ -33,6 +33,12 @@ Highest-priority next audio tasks are tracked in detail in
 - [x] [P2] Add duration/export naming helpers for YouTube-style session production.
 - [x] [P2] Add preset category/search filters for sleep, focus, meditation-style, ambience, and drone sessions.
 - [x] [P2] Add browser smoke tests for modulation and texture controls.
+- [x] [P0] Enforce strict binaural carrier isolation and restore all affected state on exit.
+- [x] [P0] Measure pre/post-limiter output and exact limiter reduction.
+- [x] [P1] Preserve completed recordings as downloadable/discardable pending exports.
+- [x] [P1] Track active preset identity, source, and unsaved modifications.
+- [x] [P1] Add mobile-only collapsible audio racks without changing the desktop layout.
+- [x] [P1] Upgrade to Next.js 16 and ESLint 9; add TypeScript and Playwright CI gates.
 
 ---
 

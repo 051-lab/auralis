@@ -18,6 +18,18 @@ When every item is complete:
 
 ## Remaining Work
 
+### 0. July 10 Release-Readiness Review
+
+Status: Engineering complete.
+
+- [x] Enforce strict binaural isolation and complete state restoration.
+- [x] Replace inferred limiter feedback with pre/post measurement and direct reduction telemetry.
+- [x] Track active preset identity and unsaved edits.
+- [x] Preserve fade-tail recordings as pending exports.
+- [x] Add TypeScript and Playwright CI release gates.
+- [x] Add mobile collapsible racks while preserving the desktop dashboard.
+- [x] Upgrade to Next.js 16 and document the remaining upstream audit exception.
+
 ### 1. Preset Quality Review
 
 Status: Engineering complete; owner listening QA pending.
@@ -32,7 +44,7 @@ Status: Engineering complete; owner listening QA pending.
 
 ### 2. Research Notes
 
-Status: In progress.
+Status: Complete for the current research pass.
 
 - [x] Add original research implementation notes from the knowledge roadmap.
 - [x] Convert first useful notes into concrete backlog candidates.
@@ -45,6 +57,7 @@ Status: Complete.
 - [x] Add preset category/search smoke coverage.
 - [x] Add modulation and texture control smoke coverage.
 - [x] Add creator-notes and recorder-gating smoke coverage.
+- [x] Add strict binaural, pending-export, active-preset, and mobile-rack browser coverage (11 workflows total).
 
 ### 4. Creator Workflow
 
@@ -73,3 +86,5 @@ Status: Deferred until visual QA requests a concrete change.
 - [ ] Tune visualizer energy only if testing shows it feels flat.
 - [ ] Improve preset thumbnails later if the library becomes visually repetitive.
 - [ ] Keep hover/focus polish incremental.
+
+This loop remains active until the owner listening rows in `docs/audio/PRESET_QA_LOG.md` are complete. HRTF research and optional visual polish are deferred work, not blockers for the current engineering release candidate.
