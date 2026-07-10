@@ -169,6 +169,7 @@ export class AudioEngine {
   private delay: Tone.FeedbackDelay;
   private chorus: Tone.Chorus;
   private masterStereoWidener: Tone.StereoWidener;
+  private preLimiterAnalyser: Tone.Analyser;
   private limiter: Tone.Limiter;
   private dryRecorderLimiter: Tone.Limiter;
   private analyser: Tone.Analyser;
@@ -214,6 +215,7 @@ export class AudioEngine {
   private oscillatorSourcesStarted = false;
   private isRecording = false;
   private fadeToken = 0;
+  private currentLimiterThresholdDb = DEFAULT_LIMITER_THRESHOLD_DB;
 
   private constructor() {
     this.masterGain = new Tone.Gain(0.8);
@@ -225,6 +227,7 @@ export class AudioEngine {
     this.delay = new Tone.FeedbackDelay({ delayTime: 0.25, feedback: 0.2, wet: 0 });
     this.chorus = new Tone.Chorus({ frequency: 0.8, depth: 0.2, wet: 0 });
     this.masterStereoWidener = new Tone.StereoWidener(0.5);
+    this.preLimiterAnalyser = new Tone.Analyser('waveform', 2048);
     this.limiter = new Tone.Limiter(DEFAULT_LIMITER_THRESHOLD_DB);
     this.dryRecorderLimiter = new Tone.Limiter(DEFAULT_LIMITER_THRESHOLD_DB);
     this.analyser = new Tone.Analyser('waveform', 2048);
@@ -275,6 +278,7 @@ export class AudioEngine {
     this.eq.connect(this.delay);
     this.delay.connect(this.chorus);
     this.chorus.connect(this.masterStereoWidener);
+    this.masterStereoWidener.connect(this.preLimiterAnalyser);
     this.masterStereoWidener.connect(this.limiter);
     this.limiter.connect(this.analyser);
     this.analyser.connect(Tone.Destination);
@@ -436,8 +440,9 @@ export class AudioEngine {
   }
 
   public setLimiterThreshold(thresholdDb: number): void {
-    this.limiter.threshold.rampTo(clamp(thresholdDb, -12, -0.1), PARAM_RAMP_SECONDS);
-    this.dryRecorderLimiter.threshold.rampTo(clamp(thresholdDb, -12, -0.1), PARAM_RAMP_SECONDS);
+    this.currentLimiterThresholdDb = clamp(thresholdDb, -12, -0.1);
+    this.limiter.threshold.rampTo(this.currentLimiterThresholdDb, PARAM_RAMP_SECONDS);
+    this.dryRecorderLimiter.threshold.rampTo(this.currentLimiterThresholdDb, PARAM_RAMP_SECONDS);
   }
 
   public setFrequency(index: number, freq: number): void {
@@ -904,16 +909,18 @@ export class AudioEngine {
     }
 
     try {
-      const analyserValue = this.analyser.getValue();
+      const inputAnalyserValue = this.preLimiterAnalyser.getValue();
+      const outputAnalyserValue = this.analyser.getValue();
+      const inputSamples =
+        typeof inputAnalyserValue === 'number' ? [inputAnalyserValue] : inputAnalyserValue;
+      const outputSamples =
+        typeof outputAnalyserValue === 'number' ? [outputAnalyserValue] : outputAnalyserValue;
+      const inputMeter = createOutputMeter(inputSamples as ArrayLike<number>);
 
-      if (typeof analyserValue === 'number') {
-        return createOutputMeter([analyserValue], {
-          limiterThresholdDb: DEFAULT_LIMITER_THRESHOLD_DB,
-        });
-      }
-
-      return createOutputMeter(analyserValue as ArrayLike<number>, {
-        limiterThresholdDb: DEFAULT_LIMITER_THRESHOLD_DB,
+      return createOutputMeter(outputSamples as ArrayLike<number>, {
+        inputPeakDb: inputMeter.peakDb,
+        limiterReductionDb: this.limiter.reduction,
+        limiterThresholdDb: this.currentLimiterThresholdDb,
       });
     } catch {
       return createSilentOutputMeter();
