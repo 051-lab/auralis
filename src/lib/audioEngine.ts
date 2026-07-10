@@ -141,7 +141,6 @@ export interface OscillatorConfig {
 }
 
 declare global {
-  // eslint-disable-next-line no-var
   var __auralisAudioEngine: AudioEngine | undefined;
 }
 

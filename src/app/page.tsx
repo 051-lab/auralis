@@ -673,52 +673,6 @@ export default function Home() {
     };
   }, [isRecording, pendingExport]);
 
-  useEffect(() => {
-    const isTypingTarget = (target: EventTarget | null): boolean => {
-      if (!(target instanceof HTMLElement)) return false;
-
-      return ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable;
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (isTypingTarget(event.target)) return;
-
-      if (event.code === 'Space') {
-        event.preventDefault();
-        if (isPlaying) {
-          handleStop();
-        } else {
-          handleStart();
-        }
-      }
-
-      if (event.key.toLowerCase() === 'r') {
-        event.preventDefault();
-        if (isRecording) {
-          handleStopRecording();
-        } else if (isPlaying) {
-          handleStartRecording();
-        }
-      }
-
-      if (event.key === 'Escape' && isBinauralMode) {
-        event.preventDefault();
-        exitBinaural();
-      }
-
-      if (event.key.toLowerCase() === 's' && presetName.trim()) {
-        event.preventDefault();
-        handleSavePreset();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  });
-
   const handleStart = async () => {
     const activeEngine = ensureEngine();
 
@@ -1452,6 +1406,52 @@ export default function Home() {
     setPendingExport(null);
     setStatusMessage('Pending recording discarded.');
   };
+
+  useEffect(() => {
+    const isTypingTarget = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLElement)) return false;
+
+      return ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable;
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) return;
+
+      if (event.code === 'Space') {
+        event.preventDefault();
+        if (isPlaying) {
+          handleStop();
+        } else {
+          handleStart();
+        }
+      }
+
+      if (event.key.toLowerCase() === 'r') {
+        event.preventDefault();
+        if (isRecording) {
+          handleStopRecording();
+        } else if (isPlaying) {
+          handleStartRecording();
+        }
+      }
+
+      if (event.key === 'Escape' && isBinauralMode) {
+        event.preventDefault();
+        exitBinaural();
+      }
+
+      if (event.key.toLowerCase() === 's' && presetName.trim()) {
+        event.preventDefault();
+        handleSavePreset();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  });
 
   const currentPreset = activePresetId
     ? presets.find((preset) => preset.id === activePresetId)
