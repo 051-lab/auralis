@@ -147,6 +147,23 @@ type BinauralSessionSnapshot = {
 
 type FrequencyLinkMode = 'free' | 'harmonic';
 
+type RecordingStopReason = 'manual' | 'playback_stop' | 'timer_complete';
+
+type FrozenRecordingConfig = {
+  mode: RecordingMode;
+  format: ExportFormat;
+  sampleRate: ExportSampleRate;
+  startedAt: number;
+};
+
+type PendingExport = {
+  id: string;
+  recording: Blob;
+  config: FrozenRecordingConfig;
+  stoppedAt: number;
+  reason: Exclude<RecordingStopReason, 'manual'>;
+};
+
 function formatTime(totalSeconds: number | null | undefined): string {
   const safeSeconds = Math.max(0, Math.floor(totalSeconds ?? 0));
   const minutes = Math.floor(safeSeconds / 60);
@@ -194,7 +211,11 @@ export default function Home() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [shareMessage, setShareMessage] = useState<string | null>(null);
   const [lastExportName, setLastExportName] = useState<string | null>(null);
+  const [pendingExport, setPendingExport] = useState<PendingExport | null>(null);
+  const [isFinalizingRecording, setIsFinalizingRecording] = useState(false);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const recordingConfigRef = useRef<FrozenRecordingConfig | null>(null);
+  const recordingFinalizationRef = useRef<Promise<void> | null>(null);
   const binauralSnapshotRef = useRef<BinauralSessionSnapshot | null>(null);
   const previousSyncRef = useRef<{
     oscillators: OscillatorState[];
@@ -605,6 +626,21 @@ export default function Home() {
   }, [isAudible]);
 
   useEffect(() => {
+    if (!isRecording && !pendingExport) return;
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [isRecording, pendingExport]);
+
+  useEffect(() => {
     const isTypingTarget = (target: EventTarget | null): boolean => {
       if (!(target instanceof HTMLElement)) return false;
 
@@ -678,6 +714,9 @@ export default function Home() {
     const didCompleteFade = await activeEngine.fadeOutAndStop(2);
 
     if (didCompleteFade) {
+      if (activeEngine.isCurrentlyRecording()) {
+        await finalizeRecording('playback_stop', false);
+      }
       setIsFadingOut(false);
       analytics.trackAudioStop('manual');
     } else if (!activeEngine.isRunning()) {
@@ -696,6 +735,9 @@ export default function Home() {
     const didCompleteFade = await activeEngine.fadeOutAndStop(10);
 
     if (didCompleteFade) {
+      if (activeEngine.isCurrentlyRecording()) {
+        await finalizeRecording('timer_complete', false);
+      }
       setIsFadingOut(false);
       analytics.trackAudioStop('timer_complete');
       setStatusMessage('Session timer complete. Audio faded out smoothly.');
@@ -1232,27 +1274,38 @@ export default function Home() {
   };
 
   const handleStartRecording = async () => {
-    if (!isPlaying) return;
-
-    const activeEngine = ensureEngine();
-
-    await activeEngine.startRecording(recordingMode);
-    setIsRecording(true);
-    setStatusMessage(`Recording started: ${getRecordingModeLabel(recordingMode)}.`);
-  };
-
-  const handleStopRecording = async () => {
-    if (!isRecording) return;
+    if (!isPlaying || pendingExport || isFinalizingRecording) return;
 
     try {
       const activeEngine = ensureEngine();
-      const blob = await activeEngine.stopRecording();
-      const exportBlob = await createExportBlob(blob, exportFormat, exportSampleRate);
+      const config: FrozenRecordingConfig = {
+        mode: recordingMode,
+        format: exportFormat,
+        sampleRate: exportSampleRate,
+        startedAt: Date.now(),
+      };
+
+      recordingConfigRef.current = config;
+      await activeEngine.startRecording(config.mode);
+      setIsRecording(true);
+      setStatusMessage(`Recording started: ${getRecordingModeLabel(config.mode)}.`);
+    } catch (err) {
+      recordingConfigRef.current = null;
+      console.error('Recording start error:', err);
+      setStatusMessage('Recording could not start.');
+    }
+  };
+
+  const downloadRecording = async (
+    recording: Blob,
+    config: FrozenRecordingConfig
+  ): Promise<string> => {
+      const exportBlob = await createExportBlob(recording, config.format, config.sampleRate);
       const url = URL.createObjectURL(exportBlob);
       const anchor = document.createElement('a');
       const extension = getRecordingExtension(exportBlob.type);
       const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-      const filename = `auralis-${timestamp}-${recordingMode}.${extension}`;
+      const filename = `auralis-${timestamp}-${config.mode}.${extension}`;
 
       anchor.href = url;
       anchor.download = filename;
@@ -1263,21 +1316,108 @@ export default function Home() {
 
       URL.revokeObjectURL(url);
 
-      setIsRecording(false);
       analytics.trackExport();
       setLastExportName(filename);
-      setStatusMessage(
-        `Recording exported: ${filename}. ${getRecordingModeLabel(recordingMode)}. ${
-          exportFormat === 'wav'
-            ? `Rendered WAV at ${exportSampleRate} kHz.`
-            : `Browser encoded ${blob.type || extension}.`
-        }`
-      );
-    } catch (err) {
-      console.error('Recording error:', err);
-      setIsRecording(false);
-      setStatusMessage('Recording export failed.');
+
+      return filename;
+  };
+
+  const finalizeRecording = async (
+    reason: RecordingStopReason,
+    downloadImmediately: boolean
+  ): Promise<void> => {
+    if (recordingFinalizationRef.current) {
+      return recordingFinalizationRef.current;
     }
+
+    const finalization = (async () => {
+      const activeEngine = ensureEngine();
+      if (!activeEngine.isCurrentlyRecording()) {
+        setIsRecording(false);
+        recordingConfigRef.current = null;
+        return;
+      }
+
+      const config = recordingConfigRef.current ?? {
+        mode: activeEngine.getRecordingMode(),
+        format: exportFormat,
+        sampleRate: exportSampleRate,
+        startedAt: Date.now(),
+      };
+
+      setIsFinalizingRecording(true);
+
+      try {
+        const recording = await activeEngine.stopRecording();
+        setIsRecording(false);
+
+        if (downloadImmediately) {
+          const filename = await downloadRecording(recording, config);
+          setStatusMessage(
+            `Recording exported: ${filename}. ${getRecordingModeLabel(config.mode)}. ${
+              config.format === 'wav'
+                ? `Rendered WAV at ${config.sampleRate} kHz.`
+                : `Browser encoded ${recording.type || getRecordingExtension(recording.type)}.`
+            }`
+          );
+          return;
+        }
+
+        setPendingExport({
+          id: `pending-${Date.now()}`,
+          recording,
+          config,
+          stoppedAt: Date.now(),
+          reason: reason as Exclude<RecordingStopReason, 'manual'>,
+        });
+        setStatusMessage('Recording finalized. Download or discard the pending export.');
+      } catch (err) {
+        console.error('Recording finalization error:', err);
+        setIsRecording(false);
+        setStatusMessage('Recording finalization failed.');
+      } finally {
+        recordingConfigRef.current = null;
+        setIsFinalizingRecording(false);
+      }
+    })();
+
+    recordingFinalizationRef.current = finalization;
+
+    try {
+      await finalization;
+    } finally {
+      recordingFinalizationRef.current = null;
+    }
+  };
+
+  const handleStopRecording = async () => {
+    if (!isRecording && !ensureEngine().isCurrentlyRecording()) return;
+
+    await finalizeRecording('manual', true);
+  };
+
+  const handleDownloadPendingExport = async () => {
+    if (!pendingExport || isFinalizingRecording) return;
+
+    setIsFinalizingRecording(true);
+
+    try {
+      const filename = await downloadRecording(pendingExport.recording, pendingExport.config);
+      setPendingExport(null);
+      setStatusMessage(`Pending recording exported: ${filename}.`);
+    } catch (err) {
+      console.error('Pending recording export error:', err);
+      setStatusMessage('Pending recording export failed. The recording is still available.');
+    } finally {
+      setIsFinalizingRecording(false);
+    }
+  };
+
+  const handleDiscardPendingExport = () => {
+    if (!pendingExport || isFinalizingRecording) return;
+
+    setPendingExport(null);
+    setStatusMessage('Pending recording discarded.');
   };
 
   const currentPreset = activePresetId
@@ -1406,7 +1546,7 @@ export default function Home() {
               {!isRecording ? (
                 <button
                   onClick={handleStartRecording}
-                  disabled={!isPlaying}
+                  disabled={!isPlaying || Boolean(pendingExport) || isFinalizingRecording}
                   aria-label={`Start ${recordingMode} recording`}
                   className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-6 py-2.5 text-sm font-semibold text-slate-100 transition hover:border-cyan-400/40 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-50 sm:w-[190px]"
                 >
@@ -1416,11 +1556,12 @@ export default function Home() {
               ) : (
                 <button
                   onClick={handleStopRecording}
+                  disabled={isFinalizingRecording}
                   aria-label="Stop recording and export audio"
                   className="inline-flex w-full animate-pulse items-center justify-center gap-2 rounded-xl bg-red-600 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-red-500 sm:w-[190px]"
                 >
                   <Square size={14} fill="currentColor" />
-                  Stop Rec
+                  {isFinalizingRecording ? 'Finalizing…' : 'Stop Rec'}
                 </button>
               )}
             </div>
@@ -1782,15 +1923,54 @@ export default function Home() {
                 </label>
                 <button
                   onClick={isRecording ? handleStopRecording : handleStartRecording}
-                  disabled={!isPlaying && !isRecording}
+                  disabled={
+                    isFinalizingRecording ||
+                    (!isPlaying && !isRecording) ||
+                    (!isRecording && Boolean(pendingExport))
+                  }
                   className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-slate-100 transition hover:border-cyan-400/40 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Download size={15} />
-                  {isRecording ? 'Export Recording' : 'Arm Recorder'}
+                  {isFinalizingRecording
+                    ? 'Finalizing…'
+                    : isRecording
+                      ? 'Export Recording'
+                      : 'Arm Recorder'}
                 </button>
                 <p className="text-xs leading-5 text-slate-500">
                   {getRecordingModeDescription(recordingMode)} Browser-native capture; WAV targets render on export.
                 </p>
+                {pendingExport && (
+                  <div className="space-y-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3" role="status">
+                    <div>
+                      <p className="text-sm font-semibold text-amber-100">Pending Export</p>
+                      <p className="mt-1 text-xs leading-5 text-amber-100/70">
+                        {pendingExport.reason === 'timer_complete'
+                          ? 'The session timer completed.'
+                          : 'Playback stopped.'}{' '}
+                        {getRecordingModeLabel(pendingExport.config.mode)} · {pendingExport.config.format.toUpperCase()} · {pendingExport.config.sampleRate} kHz
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={handleDownloadPendingExport}
+                        disabled={isFinalizingRecording}
+                        className="rounded-lg bg-amber-300 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-amber-200 disabled:opacity-50"
+                      >
+                        Download
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDiscardPendingExport}
+                        disabled={isFinalizingRecording}
+                        className="rounded-lg border border-white/10 bg-white/[0.05] px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-white/[0.1] disabled:opacity-50"
+                      >
+                        Discard
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </GlassPanel>
 
