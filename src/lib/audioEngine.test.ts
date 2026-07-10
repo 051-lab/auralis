@@ -243,8 +243,8 @@ vi.mock('tone', () => {
 
 describe('AudioEngine graph integration with Tone mocks', () => {
   it('constructs the expanded fixed master chain and accepts safe control updates', async () => {
-    const { AudioEngine } = await import('./audioEngine');
-    const engine = new AudioEngine();
+    const { getAudioEngine } = await import('./audioEngine');
+    const engine = getAudioEngine();
 
     expect(toneMock.constructed).toContain('Reverb');
     expect(toneMock.constructed).toContain('AutoPanner');
