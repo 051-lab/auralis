@@ -135,6 +135,14 @@ type PendingBinauralActivation = {
   label?: string;
 };
 
+type BinauralSessionSnapshot = {
+  oscillators: OscillatorState[];
+  masterFX: MasterFXState;
+  noiseEnabled: boolean;
+  modulation: ModulationState;
+  textureLayer: TextureLayerState;
+};
+
 type FrequencyLinkMode = 'free' | 'harmonic';
 
 function formatTime(totalSeconds: number | null | undefined): string {
@@ -185,8 +193,7 @@ export default function Home() {
   const [shareMessage, setShareMessage] = useState<string | null>(null);
   const [lastExportName, setLastExportName] = useState<string | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
-  const binauralSnapshotRef = useRef<OscillatorState[] | null>(null);
-  const binauralMasterFXSnapshotRef = useRef<MasterFXState | null>(null);
+  const binauralSnapshotRef = useRef<BinauralSessionSnapshot | null>(null);
   const previousSyncRef = useRef<{
     oscillators: OscillatorState[];
     masterFX: MasterFXState;
@@ -925,8 +932,16 @@ export default function Home() {
         ? ` Adjusted to ${formatBinauralNumber(pair.baseFrequency)} Hz + ${formatBinauralNumber(pair.beatFrequency)} Hz to stay in range.`
         : '';
 
-    binauralSnapshotRef.current = oscillators.map((oscillator) => ({ ...oscillator }));
-    binauralMasterFXSnapshotRef.current = { ...masterFX };
+    binauralSnapshotRef.current = {
+      oscillators: oscillators.map((oscillator) => ({ ...oscillator })),
+      masterFX: { ...masterFX },
+      noiseEnabled,
+      modulation: {
+        ...modulation,
+        targets: { ...modulation.targets },
+      },
+      textureLayer: { ...textureLayer },
+    };
     setBinauralMode(
       true,
       `${formatBinauralNumber(pair.baseFrequency)}Hz + ${formatBinauralNumber(pair.beatFrequency)}Hz`
@@ -939,21 +954,38 @@ export default function Home() {
 
     setReverbWet(0);
     setAutoPannerDepth(0);
+    setEqEnabled(false);
+    setStereoWidth(0.5);
+    setDelayEnabled(false);
+    setChorusEnabled(false);
+    setNoiseEnabled(false);
+    setModulationMode('off');
+    setTextureLayerEnabled(false);
 
     setOscillatorFrequency(0, pair.baseFrequency);
+    setOscillatorDetune(0, 0);
+    setOscillatorWaveform(0, 'sine');
     setOscillatorPan(0, -1);
+    setOscillatorPhase(0, 0);
     setOscillatorGain(0, 0.5);
+    setOscillatorTremoloEnabled(0, false);
 
     setOscillatorFrequency(1, pair.upperFrequency);
+    setOscillatorDetune(1, 0);
+    setOscillatorWaveform(1, 'sine');
     setOscillatorPan(1, 1);
+    setOscillatorPhase(1, 0);
     setOscillatorGain(1, 0.5);
+    setOscillatorTremoloEnabled(1, false);
 
     setOscillatorGain(2, 0);
+    setOscillatorTremoloEnabled(2, false);
     setOscillatorGain(3, 0);
+    setOscillatorTremoloEnabled(3, false);
 
     analytics.trackBinauralActivate(activePresetName, pair.beatFrequency);
     setStatusMessage(
-      `Binaural mode activated: ${activePresetName} (${pair.guidance.label}).${adjustmentNote} ${pair.guidance.caution} Reverb and panning depth disabled until exit.`
+      `Binaural mode activated: ${activePresetName} (${pair.guidance.label}).${adjustmentNote} ${pair.guidance.caution} Strict carrier lock bypasses effects, movement, noise, and textures until exit.`
     );
   };
 
@@ -993,10 +1025,9 @@ export default function Home() {
 
   const exitBinaural = () => {
     const snapshot = binauralSnapshotRef.current;
-    const masterFXSnapshot = binauralMasterFXSnapshotRef.current;
 
     if (snapshot) {
-      snapshot.forEach((oscillator, index) => {
+      snapshot.oscillators.forEach((oscillator, index) => {
         setOscillatorFrequency(index, oscillator.frequency);
         setOscillatorDetune(index, oscillator.detuneCents);
         setOscillatorGain(index, oscillator.gain);
@@ -1012,16 +1043,40 @@ export default function Home() {
         setOscillatorEnvelope(index, oscillator.attackSeconds, oscillator.releaseSeconds);
       });
 
+      setMasterVolume(snapshot.masterFX.masterVolume);
+      setLimiterThreshold(snapshot.masterFX.limiterThresholdDb);
+      setReverbWet(snapshot.masterFX.reverbWet);
+      setReverbDecay(snapshot.masterFX.reverbDecay);
+      setReverbPreDelay(snapshot.masterFX.reverbPreDelay);
+      setAutoPannerRate(snapshot.masterFX.autoPannerRate);
+      setAutoPannerDepth(snapshot.masterFX.autoPannerDepth);
+      setEqGain('low', snapshot.masterFX.eqLowGain);
+      setEqGain('mid', snapshot.masterFX.eqMidGain);
+      setEqGain('high', snapshot.masterFX.eqHighGain);
+      setEqEnabled(snapshot.masterFX.eqEnabled);
+      setStereoWidth(snapshot.masterFX.stereoWidth);
+      setDelayWet(snapshot.masterFX.delayWet);
+      setDelayTime(snapshot.masterFX.delayTime);
+      setDelayFeedback(snapshot.masterFX.delayFeedback);
+      setDelayEnabled(snapshot.masterFX.delayEnabled);
+      setChorusWet(snapshot.masterFX.chorusWet);
+      setChorusRate(snapshot.masterFX.chorusRate);
+      setChorusDepth(snapshot.masterFX.chorusDepth);
+      setChorusEnabled(snapshot.masterFX.chorusEnabled);
+      setNoiseEnabled(snapshot.noiseEnabled);
+      setModulationRate(snapshot.modulation.rate);
+      setModulationDepth(snapshot.modulation.depth);
+      Object.entries(snapshot.modulation.targets).forEach(([target, enabled]) => {
+        setModulationTarget(target as keyof ModulationState['targets'], enabled);
+      });
+      setModulationMode(snapshot.modulation.mode);
+      setTextureLayerType(snapshot.textureLayer.type);
+      setTextureLayerGain(snapshot.textureLayer.gain);
+      setTextureLayerTone(snapshot.textureLayer.tone);
+      setTextureLayerWidth(snapshot.textureLayer.width);
+      setTextureLayerMotion(snapshot.textureLayer.motion);
+      setTextureLayerEnabled(snapshot.textureLayer.enabled);
       binauralSnapshotRef.current = null;
-    }
-
-    if (masterFXSnapshot) {
-      setMasterVolume(masterFXSnapshot.masterVolume);
-      setReverbWet(masterFXSnapshot.reverbWet);
-      setReverbDecay(masterFXSnapshot.reverbDecay);
-      setAutoPannerRate(masterFXSnapshot.autoPannerRate);
-      setAutoPannerDepth(masterFXSnapshot.autoPannerDepth);
-      binauralMasterFXSnapshotRef.current = null;
     }
 
     setStatusMessage('Restored oscillator and master effect settings from before binaural mode.');
@@ -1038,6 +1093,15 @@ export default function Home() {
     analytics.trackPresetSave(trimmedName);
     setPresetName('');
     setShareMessage(`Saved preset: ${trimmedName}`);
+  };
+
+  const handleLoadPreset = (id: string, name: string) => {
+    binauralSnapshotRef.current = null;
+    setPendingBinauralActivation(null);
+    setBinauralMode(false);
+    loadPreset(id);
+    analytics.trackPresetLoad(name, 'local');
+    setShareMessage(`Loaded preset: ${name}`);
   };
 
   const handleSharePreset = async () => {
@@ -1656,7 +1720,14 @@ export default function Home() {
           </aside>
         <GlassPanel id="sound-lab" className="p-5 xl:col-span-3">
           <SectionHeader title="Master Chain" description="Final signal shaping before output and recording." />
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+          {isBinauralMode && (
+            <div className="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100" role="status">
+              Binaural Lock is active. Effects, movement, noise, and textures are bypassed until you exit binaural mode.
+            </div>
+          )}
+          <fieldset disabled={isBinauralMode} className="disabled:opacity-60">
+            <legend className="sr-only">Master chain controls</legend>
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
             <Card className={`space-y-3 p-4 ${noiseEnabled ? 'border-cyan-400/30 shadow-[0_0_32px_rgba(34,211,238,0.1)]' : ''}`}>
               <div className="flex items-center justify-between">
                 <h3 className="inline-flex items-center gap-2 text-sm font-semibold text-slate-200">
@@ -2093,14 +2164,19 @@ export default function Home() {
                 ))}
               </div>
             </Card>
-          </div>
+            </div>
+          </fieldset>
         </GlassPanel>
 
         <section className="space-y-4 xl:col-span-3">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-sm font-semibold text-slate-100">Oscillator Rack</h2>
-              <p className="text-sm text-slate-500">Four tone layers for frequency, gain, pan, waveform, and tremolo.</p>
+              <p className="text-sm text-slate-500">
+                {isBinauralMode
+                  ? 'Strict carrier pair is locked until binaural mode exits.'
+                  : 'Four tone layers for frequency, gain, pan, waveform, and tremolo.'}
+              </p>
             </div>
             <div className="hidden items-center gap-2 md:flex">
               <div className="flex rounded-full border border-white/10 bg-slate-950/60 p-1">
@@ -2112,8 +2188,9 @@ export default function Home() {
                     key={mode.value}
                     type="button"
                     onClick={() => handleFrequencyLinkModeChange(mode.value as FrequencyLinkMode)}
+                    disabled={isBinauralMode}
                     aria-pressed={frequencyLinkMode === mode.value}
-                    className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                    className={`rounded-full px-3 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
                       frequencyLinkMode === mode.value
                         ? 'bg-cyan-400/20 text-cyan-200 shadow-[0_0_18px_rgba(34,211,238,0.18)]'
                         : 'text-slate-500 hover:text-slate-200'
@@ -2128,7 +2205,11 @@ export default function Home() {
               </span>
             </div>
           </div>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <fieldset
+            disabled={isBinauralMode}
+            className="grid grid-cols-1 gap-4 disabled:opacity-70 md:grid-cols-2 lg:grid-cols-4"
+          >
+            <legend className="sr-only">Oscillator rack controls</legend>
             {oscillators.map((oscillator, index) => (
               <OscillatorPanel
                 key={index}
@@ -2164,7 +2245,7 @@ export default function Home() {
                 }
               />
             ))}
-          </div>
+          </fieldset>
         </section>
 
         <GlassPanel id="presets" className="p-5 xl:col-span-3">
@@ -2398,11 +2479,7 @@ export default function Home() {
                     </div>
                     <div className="flex shrink-0 gap-2">
                       <button
-                        onClick={() => {
-                          loadPreset(preset.id);
-                          analytics.trackPresetLoad(preset.name, 'local');
-                          setShareMessage(`Loaded preset: ${preset.name}`);
-                        }}
+                        onClick={() => handleLoadPreset(preset.id, preset.name)}
                         className="rounded-lg bg-white/[0.06] px-3 py-2 text-xs font-medium text-slate-100 transition hover:bg-cyan-400/10"
                         aria-label={`Load preset ${preset.name}`}
                       >
