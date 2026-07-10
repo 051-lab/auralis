@@ -152,4 +152,34 @@ test.describe('Auralis dashboard smoke', () => {
     });
     await expect(page.getByText('○ STANDBY')).toBeVisible();
   });
+
+  test('uses accessible collapsible racks on mobile without horizontal overflow', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+
+    const masterDisclosure = page.getByRole('button', { name: 'Master Chain Controls' });
+    await expect(masterDisclosure).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.getByLabel('Toggle noise layer')).toBeHidden();
+    await masterDisclosure.click();
+    await expect(masterDisclosure).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.getByLabel('Toggle noise layer')).toBeVisible();
+
+    const oscillatorDisclosure = page
+      .getByRole('button', { name: 'Advanced Controls' })
+      .first();
+    await expect(oscillatorDisclosure).toHaveAttribute('aria-expanded', 'false');
+    await oscillatorDisclosure.click();
+    await expect(page.getByLabel('Oscillator 1 detune cents')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Creator Session Fields' }).click();
+    await expect(page.getByLabel('Creator target duration in minutes')).toBeVisible();
+    await page.getByRole('button', { name: /Preset Results/ }).click();
+    await expect(page.getByRole('button', { name: 'Load preset Gamma Neural Binding (40Hz)' })).toBeVisible();
+
+    const dimensions = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    }));
+    expect(dimensions.scrollWidth).toBe(dimensions.clientWidth);
+  });
 });

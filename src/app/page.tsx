@@ -6,6 +6,7 @@ import {
   AudioWaveform,
   Boxes,
   CloudRain,
+  ChevronDown,
   Circle,
   Copy,
   Disc3,
@@ -192,6 +193,34 @@ function formatBinauralNumber(value: number): string {
   return Number(value.toFixed(2)).toString();
 }
 
+function MobileDisclosureButton({
+  label,
+  expanded,
+  controls,
+  onToggle,
+}: {
+  label: string;
+  expanded: boolean;
+  controls: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={expanded}
+      aria-controls={controls}
+      className="mb-4 flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-slate-200 transition hover:border-cyan-400/30 hover:bg-cyan-400/10 md:hidden"
+    >
+      {label}
+      <ChevronDown
+        size={16}
+        className={`transition-transform ${expanded ? 'rotate-180' : ''}`}
+      />
+    </button>
+  );
+}
+
 export default function Home() {
   const [engine, setEngine] = useState<AudioEngineInstance | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -213,6 +242,10 @@ export default function Home() {
   const [lastExportName, setLastExportName] = useState<string | null>(null);
   const [pendingExport, setPendingExport] = useState<PendingExport | null>(null);
   const [isFinalizingRecording, setIsFinalizingRecording] = useState(false);
+  const [masterChainMobileOpen, setMasterChainMobileOpen] = useState(false);
+  const [presetFiltersMobileOpen, setPresetFiltersMobileOpen] = useState(false);
+  const [creatorMobileOpen, setCreatorMobileOpen] = useState(false);
+  const [presetResultsMobileOpen, setPresetResultsMobileOpen] = useState(false);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const recordingConfigRef = useRef<FrozenRecordingConfig | null>(null);
   const recordingFinalizationRef = useRef<Promise<void> | null>(null);
@@ -1988,7 +2021,17 @@ export default function Home() {
               Binaural Lock is active. Effects, movement, noise, and textures are bypassed until you exit binaural mode.
             </div>
           )}
-          <fieldset disabled={isBinauralMode} className="disabled:opacity-60">
+          <MobileDisclosureButton
+            label="Master Chain Controls"
+            expanded={masterChainMobileOpen}
+            controls="master-chain-controls"
+            onToggle={() => setMasterChainMobileOpen((open) => !open)}
+          />
+          <fieldset
+            id="master-chain-controls"
+            disabled={isBinauralMode}
+            className={`${masterChainMobileOpen ? 'block' : 'hidden'} disabled:opacity-60 md:block`}
+          >
             <legend className="sr-only">Master chain controls</legend>
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
             <Card className={`space-y-3 p-4 ${noiseEnabled ? 'border-cyan-400/30 shadow-[0_0_32px_rgba(34,211,238,0.1)]' : ''}`}>
@@ -2556,7 +2599,16 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="mb-4 flex flex-wrap gap-2">
+          <MobileDisclosureButton
+            label="Preset Filters"
+            expanded={presetFiltersMobileOpen}
+            controls="preset-filter-controls"
+            onToggle={() => setPresetFiltersMobileOpen((open) => !open)}
+          />
+          <div
+            id="preset-filter-controls"
+            className={`${presetFiltersMobileOpen ? 'flex' : 'hidden'} mb-4 flex-wrap gap-2 md:flex`}
+          >
             {PRESET_CATEGORY_OPTIONS.map((category) => {
               const isActiveCategory = presetCategory === category.value;
 
@@ -2581,7 +2633,16 @@ export default function Home() {
             })}
           </div>
 
-          <div className="mb-5 grid gap-4 rounded-2xl border border-white/10 bg-slate-950/35 p-4 lg:grid-cols-[1fr_1fr_auto]">
+          <MobileDisclosureButton
+            label="Creator Session Fields"
+            expanded={creatorMobileOpen}
+            controls="creator-session-fields"
+            onToggle={() => setCreatorMobileOpen((open) => !open)}
+          />
+          <div
+            id="creator-session-fields"
+            className={`${creatorMobileOpen ? 'grid' : 'hidden'} mb-5 gap-4 rounded-2xl border border-white/10 bg-slate-950/35 p-4 md:grid lg:grid-cols-[1fr_1fr_auto]`}
+          >
             <div className="grid gap-3 sm:grid-cols-2 lg:col-span-2 xl:grid-cols-3">
               <label className="block text-xs text-slate-500">
                 Creator Title
@@ -2685,8 +2746,18 @@ export default function Home() {
             </div>
           </div>
 
-          {filteredPresets.length > 0 ? (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
+          <MobileDisclosureButton
+            label={`Preset Results (${filteredPresets.length})`}
+            expanded={presetResultsMobileOpen}
+            controls="preset-results"
+            onToggle={() => setPresetResultsMobileOpen((open) => !open)}
+          />
+          <div
+            id="preset-results"
+            className={`${presetResultsMobileOpen ? 'block' : 'hidden'} md:block`}
+          >
+            {filteredPresets.length > 0 ? (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
               {filteredPresets.map((preset) => {
                 const isBuiltInPreset = preset.id.startsWith('built-in-');
 
@@ -2765,16 +2836,17 @@ export default function Home() {
                   </div>
                 );
               })}
-            </div>
-          ) : (
-            <p className="text-sm text-slate-500">
-              {presetSearch.trim()
-                ? 'No presets match that search.'
-                : presetCategory !== 'all'
-                  ? 'No presets match this category yet.'
-                  : 'No presets saved yet. Create a soundscape and save it.'}
-            </p>
-          )}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">
+                {presetSearch.trim()
+                  ? 'No presets match that search.'
+                  : presetCategory !== 'all'
+                    ? 'No presets match this category yet.'
+                    : 'No presets saved yet. Create a soundscape and save it.'}
+              </p>
+            )}
+          </div>
         </GlassPanel>
 
         <footer className="px-4 pb-5 text-center text-xs text-slate-600 md:px-6 xl:col-span-3 xl:px-8">
