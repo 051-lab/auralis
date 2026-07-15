@@ -1,4 +1,40 @@
 import { expect, test } from '@playwright/test';
+import type { SharedPresetPayload } from '../src/store/useAuralisStore';
+import { encodeSharedPreset } from '../src/utils/sharePreset';
+
+const createSharedBinauralUrl = (overrides: Partial<SharedPresetPayload> = {}) => {
+  const payload: SharedPresetPayload = {
+    version: 2,
+    name: 'Shared Strict Pair',
+    oscillators: [
+      { frequency: 200, gain: 0.8, waveform: 'square', pan: 0, tremoloEnabled: true },
+      { frequency: 206, gain: 0.8, waveform: 'sawtooth', pan: 0, tremoloEnabled: true },
+      { frequency: 500, gain: 1, tremoloEnabled: true },
+      { frequency: 700, gain: 1, tremoloEnabled: true },
+    ],
+    masterFX: {
+      reverbWet: 1,
+      autoPannerDepth: 1,
+      eqEnabled: true,
+      delayEnabled: true,
+      chorusEnabled: true,
+    },
+    noiseEnabled: true,
+    modulation: {
+      mode: 'pulse',
+      rate: 0.5,
+      depth: 1,
+      targets: { noiseFilter: true, noiseWidth: true, oscillatorPan: true },
+    },
+    textureLayer: { enabled: true, type: 'storm', gain: 0.5, tone: 0.5, width: 1, motion: 1 },
+    isBinauralMode: true,
+    binauralPreset: '200Hz + 6Hz',
+    createdAt: 1,
+    ...overrides,
+  };
+
+  return `/?preset=${encodeURIComponent(encodeSharedPreset(payload))}`;
+};
 
 test.describe('Auralis dashboard smoke', () => {
   test('loads the styled dashboard and core controls', async ({ page }) => {
@@ -99,6 +135,67 @@ test.describe('Auralis dashboard smoke', () => {
     await expect(page.getByLabel('Toggle master EQ')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByLabel('Toggle delay')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByLabel('Toggle chorus')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('confirms a shared binaural request and restores its imported controls on exit', async ({ page }) => {
+    await page.goto(createSharedBinauralUrl());
+
+    await expect(page.getByText('Confirm Binaural Listening Setup')).toBeVisible();
+    await expect(page.getByText('Binaural Mode Active')).toHaveCount(0);
+    await page.getByRole('button', { name: "I’m Using Headphones" }).click();
+
+    await expect(page.getByText(/Binaural Lock is active/)).toBeVisible();
+    await expect(page.getByLabel('Toggle noise layer')).toBeDisabled();
+    await expect(page.getByLabel('Toggle texture layer')).toBeDisabled();
+    await expect(page.getByLabel('Toggle master EQ')).toBeDisabled();
+    await expect(page.getByLabel('Toggle delay')).toBeDisabled();
+    await expect(page.getByLabel('Toggle chorus')).toBeDisabled();
+
+    await page.getByRole('button', { name: 'Exit Binaural Mode' }).click();
+    await expect(page.getByLabel('Toggle noise layer')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByLabel('Toggle texture layer')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByLabel('Toggle master EQ')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByLabel('Toggle delay')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByLabel('Toggle chorus')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByText('Shared Strict Pair', { exact: true }).first()).toBeVisible();
+  });
+
+  test('keeps shared controls in ordinary mode when binaural confirmation is cancelled', async ({ page }) => {
+    await page.goto(createSharedBinauralUrl());
+    await page.getByRole('button', { name: 'Cancel' }).click();
+
+    await expect(page.getByText('Binaural activation cancelled.')).toBeVisible();
+    await expect(page.getByText('Binaural Mode Active')).toHaveCount(0);
+    await expect(page.getByLabel('Toggle noise layer')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByLabel('Toggle texture layer')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('honors prior binaural acknowledgement after a hard reload', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(() =>
+      window.localStorage.setItem('auralis-binaural-safety-acknowledged', 'true')
+    );
+    await page.goto(createSharedBinauralUrl());
+    await page.reload();
+
+    await expect(page.getByText('Binaural Mode Active')).toBeVisible();
+    await expect(page.getByText(/Binaural Lock is active/)).toBeVisible();
+    await expect(page.getByText('Confirm Binaural Listening Setup')).toHaveCount(0);
+  });
+
+  test('rejects invalid shared binaural intent without entering lock mode', async ({ page }) => {
+    await page.goto(
+      createSharedBinauralUrl({
+        name: 'Invalid Shared Pair',
+        oscillators: [{ frequency: 240 }, { frequency: 200 }],
+      })
+    );
+
+    await expect(
+      page.getByText('Shared preset loaded in ordinary mode; its binaural request was invalid.')
+    ).toBeVisible();
+    await expect(page.getByText('Confirm Binaural Listening Setup')).toHaveCount(0);
+    await expect(page.getByText('Binaural Mode Active')).toHaveCount(0);
   });
 
   test('tracks loaded preset identity and marks control edits', async ({ page }) => {

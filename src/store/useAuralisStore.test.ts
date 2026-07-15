@@ -310,6 +310,22 @@ describe('store normalization', () => {
     });
   });
 
+  it('loads shared binaural intent into ordinary mode', () => {
+    useAuralisStore.getState().applySharedPreset({
+      name: 'Shared Binaural Request',
+      oscillators: [{ frequency: 200 }, { frequency: 206 }],
+      isBinauralMode: true,
+      binauralPreset: '200Hz + 6Hz',
+    });
+
+    expect(useAuralisStore.getState()).toMatchObject({
+      isBinauralMode: false,
+      binauralPreset: null,
+      activePresetName: 'Shared Binaural Request',
+      activePresetSource: 'shared',
+    });
+  });
+
   it('tracks loaded preset identity and modified state', () => {
     const store = useAuralisStore.getState();
 

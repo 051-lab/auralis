@@ -63,9 +63,10 @@ import {
   getBinauralGuidance,
   normalizeBinauralBaseFrequency,
   normalizeBinauralBeatFrequency,
+  parseStrictBinauralCarriers,
 } from '@/utils/binaural';
 import { clamp } from '@/utils/math';
-import { decodeSharedPreset, encodeSharedPreset } from '@/utils/sharePreset';
+import { encodeSharedPreset, ingestSharedPreset } from '@/utils/sharePreset';
 import {
   createExportBlob,
   getRecordingExtension,
@@ -135,6 +136,7 @@ type PendingBinauralActivation = {
   baseFrequency: number;
   beatFrequency: number;
   label?: string;
+  source?: 'manual' | 'shared';
 };
 
 type BinauralSessionSnapshot = {
@@ -250,6 +252,9 @@ export default function Home() {
   const recordingConfigRef = useRef<FrozenRecordingConfig | null>(null);
   const recordingFinalizationRef = useRef<Promise<void> | null>(null);
   const binauralSnapshotRef = useRef<BinauralSessionSnapshot | null>(null);
+  const startBinauralRef = useRef<(baseFreq: number, beatFreq: number, label?: string) => void>(
+    () => undefined
+  );
   const previousSyncRef = useRef<{
     oscillators: OscillatorState[];
     masterFX: MasterFXState;
@@ -381,15 +386,37 @@ export default function Home() {
 
     if (!presetParam) return;
 
-    try {
-      const decodedPreset = decodeSharedPreset(presetParam);
-
-      applySharedPreset(decodedPreset);
-      analytics.trackPresetLoad(decodedPreset.name ?? 'Shared Preset', 'url');
-      setShareMessage('Shared preset loaded from URL.');
-    } catch (err) {
-      console.warn('Failed to load shared preset from URL:', err);
+    const result = ingestSharedPreset(presetParam);
+    if (!result.ok) {
+      console.warn('Failed to load shared preset from URL:', result.code);
       setShareMessage('Could not load shared preset from URL.');
+      return;
+    }
+
+    const decodedPreset = result.payload;
+    const requestsBinauralMode = decodedPreset.isBinauralMode === true;
+    const strictPair = requestsBinauralMode
+      ? parseStrictBinauralCarriers(decodedPreset.oscillators)
+      : null;
+
+    applySharedPreset(decodedPreset);
+
+    if (requestsBinauralMode && !strictPair) {
+      setShareMessage('Shared preset loaded in ordinary mode; its binaural request was invalid.');
+      return;
+    }
+
+    analytics.trackPresetLoad(decodedPreset.name ?? 'Shared Preset', 'url');
+    if (strictPair) {
+      setPendingBinauralActivation({
+        baseFrequency: strictPair.baseFrequency,
+        beatFrequency: strictPair.beatFrequency,
+        label: decodedPreset.name ?? decodedPreset.binauralPreset ?? 'Shared Binaural Preset',
+        source: 'shared',
+      });
+      setShareMessage('Shared preset loaded. Confirm the binaural listening setup to activate it.');
+    } else {
+      setShareMessage('Shared preset loaded from URL.');
     }
   }, [applySharedPreset]);
 
@@ -1095,9 +1122,34 @@ export default function Home() {
     );
   };
 
+  useEffect(() => {
+    startBinauralRef.current = startBinaural;
+  });
+
+  useEffect(() => {
+    if (
+      !hasAcknowledgedBinauralSafety ||
+      pendingBinauralActivation?.source !== 'shared'
+    ) {
+      return;
+    }
+
+    startBinauralRef.current(
+      pendingBinauralActivation.baseFrequency,
+      pendingBinauralActivation.beatFrequency,
+      pendingBinauralActivation.label
+    );
+    setPendingBinauralActivation(null);
+  }, [hasAcknowledgedBinauralSafety, pendingBinauralActivation]);
+
   const activateBinaural = (baseFreq: number, beatFreq: number, label?: string) => {
     if (!hasAcknowledgedBinauralSafety) {
-      setPendingBinauralActivation({ baseFrequency: baseFreq, beatFrequency: beatFreq, label });
+      setPendingBinauralActivation({
+        baseFrequency: baseFreq,
+        beatFrequency: beatFreq,
+        label,
+        source: 'manual',
+      });
       setStatusMessage('Confirm stereo headphones and low volume before starting binaural mode.');
       return;
     }

@@ -1800,10 +1800,8 @@ export const useAuralisStore = create<AuralisState>()(
           modulation: normalizeModulation(payload.modulation),
           textureLayer: normalizeTextureLayer(payload.textureLayer),
           creatorSession: normalizeCreatorSession(payload.creatorSession),
-          isBinauralMode:
-            typeof payload.isBinauralMode === 'boolean' ? payload.isBinauralMode : false,
-          binauralPreset:
-            typeof payload.binauralPreset === 'string' ? payload.binauralPreset : null,
+          isBinauralMode: false,
+          binauralPreset: null,
           activePresetId: null,
           activePresetName:
             typeof payload.name === 'string' && payload.name.trim()
