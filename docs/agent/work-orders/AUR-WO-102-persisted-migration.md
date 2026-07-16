@@ -54,4 +54,3 @@ npm run build
 ## Rollback boundary
 
 Revert the AUR-WO-102 commit while retaining AUR-WO-101.
-

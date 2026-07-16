@@ -60,4 +60,3 @@ npm run test:e2e
 ## Rollback boundary
 
 Revert AUR-WO-103 while retaining input and persistence hardening.
-

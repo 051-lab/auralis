@@ -1,6 +1,6 @@
 ---
 id: AUR-WO-104
-status: approved
+status: complete
 owner_role: auralis_implementer
 reviewers:
   - auralis_qa_reviewer
