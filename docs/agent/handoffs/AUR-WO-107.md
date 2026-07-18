@@ -1,7 +1,7 @@
 ---
 work_order: AUR-WO-107
 role: auralis_implementer
-status: integration-pending
+status: complete
 branch: review/auralis-release-hardening-2026-07-16
 commit: b96dee3
 ---
@@ -11,8 +11,8 @@ commit: b96dee3
 ## Behavioral summary
 
 Removed one trailing blank line from AUR-WO-101, 102, and 103. No application behavior or
-document meaning changed. Full validation passed; publication remains coordinator-owned and
-is blocked on owner GitHub re-authentication.
+document meaning changed. Full validation passed and the review candidate was published as
+an unmerged draft pull request for owner review.
 
 ## Validation executed
 
@@ -26,15 +26,18 @@ is blocked on owner GitHub re-authentication.
 | `npm run test:e2e` | pass | 17 Chromium tests passed. |
 | `python3 scripts/validate_codex_team.py` | pass | Agents and skills validated. |
 
-## Publication blocker
+## Publication record
 
 ```text
-category: environment
-minimal_reproduction: git push -u origin review/auralis-release-hardening-2026-07-16
-evidence: HTTPS rejected the stored token; SSH rejected the available identity.
-affected_acceptance_criterion: Push the review branch and open an unmerged pull request.
-smallest_decision_required: Owner re-authenticates GitHub CLI/Git credentials, then publication resumes.
+remote: https://github.com/051-lab/auralis.git
+branch: review/auralis-release-hardening-2026-07-16
+pull_request: https://github.com/051-lab/auralis/pull/2
+state: draft, unmerged
 ```
+
+The initial HTTPS and SSH publication attempts failed because available credentials were
+invalid or lacked repository write access. The owner authenticated the `051-lab` account;
+the subsequent non-force push and draft pull-request creation succeeded.
 
 ## Compatibility
 
@@ -42,6 +45,5 @@ Presets, persistence, sharing, audible behavior, recording, and browser behavior
 
 ## Unresolved risks
 
-- Review branch passed full gates and remained 16 commits ahead of refreshed `origin/main` with
-  no remote-only commits before the failed publication attempt.
+- Review branch passed full gates and remained a direct descendant of refreshed `origin/main`.
 - The pull request must remain unmerged pending owner approval.

@@ -1,6 +1,6 @@
 ---
 id: AUR-WO-107
-status: approved
+status: complete
 owner_role: auralis_implementer
 reviewers:
   - auralis_qa_reviewer
@@ -52,13 +52,13 @@ request without rewriting history or merging it into `main`.
 
 ## Acceptance criteria
 
-- [ ] Remove the three EOF whitespace failures without changing document meaning.
-- [ ] `git diff --check origin/main..HEAD` passes.
-- [ ] The review branch remains a direct descendant of `origin/main`; history is not rewritten.
-- [ ] AUR-WO-104 contract and implementation remain separate commits.
-- [ ] Full lint, typecheck, unit, build, Playwright, and Codex-team validation pass.
-- [ ] Push only the review branch and open a pull request targeting `main`.
-- [ ] Leave the pull request unmerged for owner review.
+- [x] Remove the three EOF whitespace failures without changing document meaning.
+- [x] `git diff --check origin/main..HEAD` passes.
+- [x] The review branch remains a direct descendant of `origin/main`; history is not rewritten.
+- [x] AUR-WO-104 contract and implementation remain separate commits.
+- [x] Full lint, typecheck, unit, build, Playwright, and Codex-team validation pass.
+- [x] Push only the review branch and open a pull request targeting `main`.
+- [x] Leave the pull request unmerged for owner review.
 
 ## Required validation
 
