@@ -53,13 +53,13 @@ describe('audioMeter', () => {
       limiterActive: false,
     });
 
-    expect(classifyMeterLevel(-1.5)).toEqual({
+    expect(classifyMeterLevel(-1.5, { limiterReductionDb: -2 })).toEqual({
       isHot: true,
       isClipping: false,
       limiterActive: true,
     });
 
-    expect(classifyMeterLevel(-0.7)).toEqual({
+    expect(classifyMeterLevel(-0.7, { inputPeakDb: 0.2, limiterReductionDb: -3 })).toEqual({
       isHot: true,
       isClipping: true,
       limiterActive: true,
@@ -72,6 +72,8 @@ describe('audioMeter', () => {
     expect(meter.rmsDb).toBeLessThan(0);
     expect(meter.peakDb).toBeCloseTo(20 * Math.log10(0.3), 6);
     expect(meter.peakLinear).toBeCloseTo(0.3, 6);
+    expect(meter.inputPeakDb).toBe(meter.outputPeakDb);
+    expect(meter.limiterReductionDb).toBe(0);
     expect(meter.isHot).toBe(false);
   });
 
@@ -85,8 +87,12 @@ describe('audioMeter', () => {
       rmsDb: METER_FLOOR_DB,
       peakDb: METER_FLOOR_DB,
       peakLinear: 0,
+      inputPeakDb: METER_FLOOR_DB,
+      outputPeakDb: METER_FLOOR_DB,
+      limiterReductionDb: 0,
       isHot: false,
       isClipping: false,
+      inputClipRisk: false,
       limiterActive: false,
     });
   });

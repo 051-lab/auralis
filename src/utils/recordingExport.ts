@@ -112,13 +112,16 @@ export async function createExportBlob(
   }
 
   const audioContext = new AudioContextConstructor();
-  const decodedBuffer = await audioContext.decodeAudioData(await recording.arrayBuffer());
-  const renderedBuffer = await resampleAudioBuffer(
-    decodedBuffer,
-    getTargetSampleRate(exportSampleRate)
-  );
 
-  await audioContext.close();
+  try {
+    const decodedBuffer = await audioContext.decodeAudioData(await recording.arrayBuffer());
+    const renderedBuffer = await resampleAudioBuffer(
+      decodedBuffer,
+      getTargetSampleRate(exportSampleRate)
+    );
 
-  return encodeWav24(renderedBuffer);
+    return encodeWav24(renderedBuffer);
+  } finally {
+    await audioContext.close();
+  }
 }

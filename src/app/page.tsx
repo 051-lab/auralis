@@ -6,6 +6,7 @@ import {
   AudioWaveform,
   Boxes,
   CloudRain,
+  ChevronDown,
   Circle,
   Copy,
   Disc3,
@@ -41,6 +42,7 @@ import {
   useAuralisStore,
 } from '@/store/useAuralisStore';
 import type {
+  ActivePresetIdentity,
   CreatorSessionState,
   MasterFXState,
   ModulationState,
@@ -61,9 +63,10 @@ import {
   getBinauralGuidance,
   normalizeBinauralBaseFrequency,
   normalizeBinauralBeatFrequency,
+  parseStrictBinauralCarriers,
 } from '@/utils/binaural';
 import { clamp } from '@/utils/math';
-import { decodeSharedPreset, encodeSharedPreset } from '@/utils/sharePreset';
+import { encodeSharedPreset, ingestSharedPreset } from '@/utils/sharePreset';
 import {
   createExportBlob,
   getRecordingExtension,
@@ -133,9 +136,36 @@ type PendingBinauralActivation = {
   baseFrequency: number;
   beatFrequency: number;
   label?: string;
+  source?: 'manual' | 'shared';
+};
+
+type BinauralSessionSnapshot = {
+  oscillators: OscillatorState[];
+  masterFX: MasterFXState;
+  noiseEnabled: boolean;
+  modulation: ModulationState;
+  textureLayer: TextureLayerState;
+  activePresetIdentity: ActivePresetIdentity;
 };
 
 type FrequencyLinkMode = 'free' | 'harmonic';
+
+type RecordingStopReason = 'manual' | 'playback_stop' | 'timer_complete';
+
+type FrozenRecordingConfig = {
+  mode: RecordingMode;
+  format: ExportFormat;
+  sampleRate: ExportSampleRate;
+  startedAt: number;
+};
+
+type PendingExport = {
+  id: string;
+  recording: Blob;
+  config: FrozenRecordingConfig;
+  stoppedAt: number;
+  reason: Exclude<RecordingStopReason, 'manual'>;
+};
 
 function formatTime(totalSeconds: number | null | undefined): string {
   const safeSeconds = Math.max(0, Math.floor(totalSeconds ?? 0));
@@ -165,6 +195,34 @@ function formatBinauralNumber(value: number): string {
   return Number(value.toFixed(2)).toString();
 }
 
+function MobileDisclosureButton({
+  label,
+  expanded,
+  controls,
+  onToggle,
+}: {
+  label: string;
+  expanded: boolean;
+  controls: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={expanded}
+      aria-controls={controls}
+      className="mb-4 flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-slate-200 transition hover:border-cyan-400/30 hover:bg-cyan-400/10 md:hidden"
+    >
+      {label}
+      <ChevronDown
+        size={16}
+        className={`transition-transform ${expanded ? 'rotate-180' : ''}`}
+      />
+    </button>
+  );
+}
+
 export default function Home() {
   const [engine, setEngine] = useState<AudioEngineInstance | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -184,9 +242,19 @@ export default function Home() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [shareMessage, setShareMessage] = useState<string | null>(null);
   const [lastExportName, setLastExportName] = useState<string | null>(null);
+  const [pendingExport, setPendingExport] = useState<PendingExport | null>(null);
+  const [isFinalizingRecording, setIsFinalizingRecording] = useState(false);
+  const [masterChainMobileOpen, setMasterChainMobileOpen] = useState(false);
+  const [presetFiltersMobileOpen, setPresetFiltersMobileOpen] = useState(false);
+  const [creatorMobileOpen, setCreatorMobileOpen] = useState(false);
+  const [presetResultsMobileOpen, setPresetResultsMobileOpen] = useState(false);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
-  const binauralSnapshotRef = useRef<OscillatorState[] | null>(null);
-  const binauralMasterFXSnapshotRef = useRef<MasterFXState | null>(null);
+  const recordingConfigRef = useRef<FrozenRecordingConfig | null>(null);
+  const recordingFinalizationRef = useRef<Promise<void> | null>(null);
+  const binauralSnapshotRef = useRef<BinauralSessionSnapshot | null>(null);
+  const startBinauralRef = useRef<(baseFreq: number, beatFreq: number, label?: string) => void>(
+    () => undefined
+  );
   const previousSyncRef = useRef<{
     oscillators: OscillatorState[];
     masterFX: MasterFXState;
@@ -210,6 +278,10 @@ export default function Home() {
     isBinauralMode,
     binauralPreset,
     presets,
+    activePresetId,
+    activePresetName,
+    activePresetSource,
+    isActivePresetModified,
     timerDuration,
     timerRemaining,
     isRecording,
@@ -278,6 +350,8 @@ export default function Home() {
     setTextureLayerMotion,
     setCreatorSessionField,
     applySharedPreset,
+    markActivePresetModified,
+    setActivePresetIdentity,
   } = useAuralisStore();
 
   const isAudible = isAudiblePlayback(isPlaying, isFadingOut);
@@ -312,15 +386,37 @@ export default function Home() {
 
     if (!presetParam) return;
 
-    try {
-      const decodedPreset = decodeSharedPreset(presetParam);
-
-      applySharedPreset(decodedPreset);
-      analytics.trackPresetLoad(decodedPreset.name ?? 'Shared Preset', 'url');
-      setShareMessage('Shared preset loaded from URL.');
-    } catch (err) {
-      console.warn('Failed to load shared preset from URL:', err);
+    const result = ingestSharedPreset(presetParam);
+    if (!result.ok) {
+      console.warn('Failed to load shared preset from URL:', result.code);
       setShareMessage('Could not load shared preset from URL.');
+      return;
+    }
+
+    const decodedPreset = result.payload;
+    const requestsBinauralMode = decodedPreset.isBinauralMode === true;
+    const strictPair = requestsBinauralMode
+      ? parseStrictBinauralCarriers(decodedPreset.oscillators)
+      : null;
+
+    applySharedPreset(decodedPreset);
+
+    if (requestsBinauralMode && !strictPair) {
+      setShareMessage('Shared preset loaded in ordinary mode; its binaural request was invalid.');
+      return;
+    }
+
+    analytics.trackPresetLoad(decodedPreset.name ?? 'Shared Preset', 'url');
+    if (strictPair) {
+      setPendingBinauralActivation({
+        baseFrequency: strictPair.baseFrequency,
+        beatFrequency: strictPair.beatFrequency,
+        label: decodedPreset.name ?? decodedPreset.binauralPreset ?? 'Shared Binaural Preset',
+        source: 'shared',
+      });
+      setShareMessage('Shared preset loaded. Confirm the binaural listening setup to activate it.');
+    } else {
+      setShareMessage('Shared preset loaded from URL.');
     }
   }, [applySharedPreset]);
 
@@ -590,50 +686,19 @@ export default function Home() {
   }, [isAudible]);
 
   useEffect(() => {
-    const isTypingTarget = (target: EventTarget | null): boolean => {
-      if (!(target instanceof HTMLElement)) return false;
+    if (!isRecording && !pendingExport) return;
 
-      return ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
     };
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (isTypingTarget(event.target)) return;
-
-      if (event.code === 'Space') {
-        event.preventDefault();
-        if (isPlaying) {
-          handleStop();
-        } else {
-          handleStart();
-        }
-      }
-
-      if (event.key.toLowerCase() === 'r') {
-        event.preventDefault();
-        if (isRecording) {
-          handleStopRecording();
-        } else if (isPlaying) {
-          handleStartRecording();
-        }
-      }
-
-      if (event.key === 'Escape' && isBinauralMode) {
-        event.preventDefault();
-        exitBinaural();
-      }
-
-      if (event.key.toLowerCase() === 's' && presetName.trim()) {
-        event.preventDefault();
-        handleSavePreset();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('beforeunload', handleBeforeUnload);
 
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  });
+  }, [isRecording, pendingExport]);
 
   const handleStart = async () => {
     const activeEngine = ensureEngine();
@@ -663,6 +728,9 @@ export default function Home() {
     const didCompleteFade = await activeEngine.fadeOutAndStop(2);
 
     if (didCompleteFade) {
+      if (activeEngine.isCurrentlyRecording()) {
+        await finalizeRecording('playback_stop', false);
+      }
       setIsFadingOut(false);
       analytics.trackAudioStop('manual');
     } else if (!activeEngine.isRunning()) {
@@ -681,6 +749,9 @@ export default function Home() {
     const didCompleteFade = await activeEngine.fadeOutAndStop(10);
 
     if (didCompleteFade) {
+      if (activeEngine.isCurrentlyRecording()) {
+        await finalizeRecording('timer_complete', false);
+      }
       setIsFadingOut(false);
       analytics.trackAudioStop('timer_complete');
       setStatusMessage('Session timer complete. Audio faded out smoothly.');
@@ -698,6 +769,8 @@ export default function Home() {
         setOscillatorFrequency(ratioIndex + 1, clampNumber(freq * ratio, 20, 20000));
       });
     }
+
+    markActivePresetModified();
   };
 
   const handleFrequencyLinkModeChange = (mode: FrequencyLinkMode) => {
@@ -709,51 +782,63 @@ export default function Home() {
       [2, 3, 4].forEach((ratio, ratioIndex) => {
         setOscillatorFrequency(ratioIndex + 1, clampNumber(baseFrequency * ratio, 20, 20000));
       });
+      markActivePresetModified();
     }
   };
 
   const handleDetuneChange = (index: number, detuneCents: number) => {
     setOscillatorDetune(index, detuneCents);
+    markActivePresetModified();
   };
 
   const handleGainChange = (index: number, gain: number) => {
     setOscillatorGain(index, gain);
+    markActivePresetModified();
   };
 
   const handleWaveformChange = (index: number, waveform: WaveformType) => {
     setOscillatorWaveform(index, waveform);
+    markActivePresetModified();
   };
 
   const handlePanChange = (index: number, pan: number) => {
     setOscillatorPan(index, pan);
+    markActivePresetModified();
   };
 
   const handlePhaseChange = (index: number, phaseDegrees: number) => {
     setOscillatorPhase(index, phaseDegrees);
+    markActivePresetModified();
   };
 
   const handleMuteToggle = (index: number, muted: boolean) => {
     setOscillatorMuted(index, muted);
+    markActivePresetModified();
   };
 
   const handleSoloToggle = (index: number, soloed: boolean) => {
     setOscillatorSoloed(index, soloed);
+    markActivePresetModified();
   };
 
   const handleTremoloToggle = (index: number, enabled: boolean) => {
     setOscillatorTremoloEnabled(index, enabled);
+    markActivePresetModified();
   };
 
   const handleTremoloShapeChange = (index: number, shape: WaveformType) => {
     setOscillatorTremoloShape(index, shape);
+    markActivePresetModified();
   };
 
   const handleTremoloRateChange = (index: number, rate: number) => {
     setOscillatorTremoloRate(index, rate);
+    markActivePresetModified();
   };
 
   const handleTremoloDepthChange = (index: number, depth: number) => {
     setOscillatorTremoloDepth(index, depth);
+    markActivePresetModified();
   };
 
   const handleEnvelopeChange = (
@@ -762,72 +847,104 @@ export default function Home() {
     releaseSeconds: number
   ) => {
     setOscillatorEnvelope(index, attackSeconds, releaseSeconds);
+    markActivePresetModified();
   };
 
   const handleMasterVolumeChange = (volume: number) => {
     setMasterVolume(volume);
+    markActivePresetModified();
   };
 
   const handleLimiterThresholdChange = (thresholdDb: number) => {
     setLimiterThreshold(thresholdDb);
+    markActivePresetModified();
   };
 
   const handleReverbChange = (wet: number) => {
     setReverbWet(wet);
+    markActivePresetModified();
   };
 
   const handleReverbDecayChange = (decay: number) => {
     setReverbDecay(decay);
+    markActivePresetModified();
   };
 
   const handleReverbPreDelayChange = (preDelay: number) => {
     setReverbPreDelay(preDelay);
+    markActivePresetModified();
   };
 
   const handleAutoPannerRateChange = (rate: number) => {
     setAutoPannerRate(rate);
+    markActivePresetModified();
   };
 
   const handleAutoPannerDepthChange = (depth: number) => {
     setAutoPannerDepth(depth);
+    markActivePresetModified();
+  };
+
+  const handleEqEnabledChange = (enabled: boolean) => {
+    setEqEnabled(enabled);
+    markActivePresetModified();
   };
 
   const handleEqGainChange = (band: 'low' | 'mid' | 'high', gain: number) => {
     setEqGain(band, gain);
+    markActivePresetModified();
   };
 
   const handleStereoWidthChange = (width: number) => {
     setStereoWidth(width);
+    markActivePresetModified();
+  };
+
+  const handleDelayEnabledChange = (enabled: boolean) => {
+    setDelayEnabled(enabled);
+    markActivePresetModified();
   };
 
   const handleDelayWetChange = (wet: number) => {
     setDelayWet(wet);
+    markActivePresetModified();
   };
 
   const handleDelayTimeChange = (time: number) => {
     setDelayTime(time);
+    markActivePresetModified();
   };
 
   const handleDelayFeedbackChange = (feedback: number) => {
     setDelayFeedback(feedback);
+    markActivePresetModified();
+  };
+
+  const handleChorusEnabledChange = (enabled: boolean) => {
+    setChorusEnabled(enabled);
+    markActivePresetModified();
   };
 
   const handleChorusWetChange = (wet: number) => {
     setChorusWet(wet);
+    markActivePresetModified();
   };
 
   const handleChorusRateChange = (rate: number) => {
     setChorusRate(rate);
+    markActivePresetModified();
   };
 
   const handleChorusDepthChange = (depth: number) => {
     setChorusDepth(depth);
+    markActivePresetModified();
   };
 
   const handleNoiseToggle = (enabled: boolean) => {
     const activeEngine = ensureEngine();
 
     setNoiseEnabled(enabled);
+    markActivePresetModified();
 
     if (enabled && isPlaying && noiseGain > 0) {
       activeEngine.startNoise();
@@ -838,34 +955,42 @@ export default function Home() {
 
   const handleNoiseTypeChange = (type: NoiseType) => {
     setNoiseType(type);
+    markActivePresetModified();
   };
 
   const handleNoiseGainChange = (gain: number) => {
     setNoiseGain(gain);
+    markActivePresetModified();
   };
 
   const handleNoiseHighpassChange = (frequency: number) => {
     setNoiseHighpassFrequency(frequency);
+    markActivePresetModified();
   };
 
   const handleNoiseLowpassChange = (frequency: number) => {
     setNoiseLowpassFrequency(frequency);
+    markActivePresetModified();
   };
 
   const handleNoiseStereoWidthChange = (width: number) => {
     setNoiseStereoWidth(width);
+    markActivePresetModified();
   };
 
   const handleModulationModeChange = (mode: ModulationMode) => {
     setModulationMode(mode);
+    markActivePresetModified();
   };
 
   const handleModulationRateChange = (rate: number) => {
     setModulationRate(rate);
+    markActivePresetModified();
   };
 
   const handleModulationDepthChange = (depth: number) => {
     setModulationDepth(depth);
+    markActivePresetModified();
   };
 
   const handleModulationTargetChange = (
@@ -873,30 +998,37 @@ export default function Home() {
     enabled: boolean
   ) => {
     setModulationTarget(target, enabled);
+    markActivePresetModified();
   };
 
   const handleTextureToggle = (enabled: boolean) => {
     setTextureLayerEnabled(enabled);
+    markActivePresetModified();
   };
 
   const handleTextureTypeChange = (type: TextureType) => {
     setTextureLayerType(type);
+    markActivePresetModified();
   };
 
   const handleTextureGainChange = (gain: number) => {
     setTextureLayerGain(gain);
+    markActivePresetModified();
   };
 
   const handleTextureToneChange = (tone: number) => {
     setTextureLayerTone(tone);
+    markActivePresetModified();
   };
 
   const handleTextureWidthChange = (width: number) => {
     setTextureLayerWidth(width);
+    markActivePresetModified();
   };
 
   const handleTextureMotionChange = (motion: number) => {
     setTextureLayerMotion(motion);
+    markActivePresetModified();
   };
 
   const handleCreatorFieldChange = (
@@ -904,6 +1036,7 @@ export default function Home() {
     value: string | number
   ) => {
     setCreatorSessionField(field, value);
+    markActivePresetModified();
   };
 
   const handlePercentInputChange = (
@@ -918,15 +1051,30 @@ export default function Home() {
 
   const startBinaural = (baseFreq: number, beatFreq: number, label?: string) => {
     const pair = createBinauralPair(baseFreq, beatFreq);
-    const activePresetName =
+    const binauralSessionName =
       label ?? BINAURAL_PRESETS.find((preset) => preset.freq === pair.beatFrequency)?.name ?? 'Custom';
     const adjustmentNote =
       pair.baseAdjusted || pair.beatAdjusted
         ? ` Adjusted to ${formatBinauralNumber(pair.baseFrequency)} Hz + ${formatBinauralNumber(pair.beatFrequency)} Hz to stay in range.`
         : '';
 
-    binauralSnapshotRef.current = oscillators.map((oscillator) => ({ ...oscillator }));
-    binauralMasterFXSnapshotRef.current = { ...masterFX };
+    binauralSnapshotRef.current = {
+      oscillators: oscillators.map((oscillator) => ({ ...oscillator })),
+      masterFX: { ...masterFX },
+      noiseEnabled,
+      modulation: {
+        ...modulation,
+        targets: { ...modulation.targets },
+      },
+      textureLayer: { ...textureLayer },
+      activePresetIdentity: {
+        id: activePresetId,
+        name: activePresetName,
+        source: activePresetSource,
+        modified: isActivePresetModified,
+      },
+    };
+    markActivePresetModified();
     setBinauralMode(
       true,
       `${formatBinauralNumber(pair.baseFrequency)}Hz + ${formatBinauralNumber(pair.beatFrequency)}Hz`
@@ -939,27 +1087,69 @@ export default function Home() {
 
     setReverbWet(0);
     setAutoPannerDepth(0);
+    setEqEnabled(false);
+    setStereoWidth(0.5);
+    setDelayEnabled(false);
+    setChorusEnabled(false);
+    setNoiseEnabled(false);
+    setModulationMode('off');
+    setTextureLayerEnabled(false);
 
     setOscillatorFrequency(0, pair.baseFrequency);
+    setOscillatorDetune(0, 0);
+    setOscillatorWaveform(0, 'sine');
     setOscillatorPan(0, -1);
+    setOscillatorPhase(0, 0);
     setOscillatorGain(0, 0.5);
+    setOscillatorTremoloEnabled(0, false);
 
     setOscillatorFrequency(1, pair.upperFrequency);
+    setOscillatorDetune(1, 0);
+    setOscillatorWaveform(1, 'sine');
     setOscillatorPan(1, 1);
+    setOscillatorPhase(1, 0);
     setOscillatorGain(1, 0.5);
+    setOscillatorTremoloEnabled(1, false);
 
     setOscillatorGain(2, 0);
+    setOscillatorTremoloEnabled(2, false);
     setOscillatorGain(3, 0);
+    setOscillatorTremoloEnabled(3, false);
 
-    analytics.trackBinauralActivate(activePresetName, pair.beatFrequency);
+    analytics.trackBinauralActivate(binauralSessionName, pair.beatFrequency);
     setStatusMessage(
-      `Binaural mode activated: ${activePresetName} (${pair.guidance.label}).${adjustmentNote} ${pair.guidance.caution} Reverb and panning depth disabled until exit.`
+      `Binaural mode activated: ${binauralSessionName} (${pair.guidance.label}).${adjustmentNote} ${pair.guidance.caution} Strict carrier lock bypasses effects, movement, noise, and textures until exit.`
     );
   };
 
+  useEffect(() => {
+    startBinauralRef.current = startBinaural;
+  });
+
+  useEffect(() => {
+    if (
+      !hasAcknowledgedBinauralSafety ||
+      pendingBinauralActivation?.source !== 'shared'
+    ) {
+      return;
+    }
+
+    startBinauralRef.current(
+      pendingBinauralActivation.baseFrequency,
+      pendingBinauralActivation.beatFrequency,
+      pendingBinauralActivation.label
+    );
+    setPendingBinauralActivation(null);
+  }, [hasAcknowledgedBinauralSafety, pendingBinauralActivation]);
+
   const activateBinaural = (baseFreq: number, beatFreq: number, label?: string) => {
     if (!hasAcknowledgedBinauralSafety) {
-      setPendingBinauralActivation({ baseFrequency: baseFreq, beatFrequency: beatFreq, label });
+      setPendingBinauralActivation({
+        baseFrequency: baseFreq,
+        beatFrequency: beatFreq,
+        label,
+        source: 'manual',
+      });
       setStatusMessage('Confirm stereo headphones and low volume before starting binaural mode.');
       return;
     }
@@ -993,10 +1183,9 @@ export default function Home() {
 
   const exitBinaural = () => {
     const snapshot = binauralSnapshotRef.current;
-    const masterFXSnapshot = binauralMasterFXSnapshotRef.current;
 
     if (snapshot) {
-      snapshot.forEach((oscillator, index) => {
+      snapshot.oscillators.forEach((oscillator, index) => {
         setOscillatorFrequency(index, oscillator.frequency);
         setOscillatorDetune(index, oscillator.detuneCents);
         setOscillatorGain(index, oscillator.gain);
@@ -1012,16 +1201,41 @@ export default function Home() {
         setOscillatorEnvelope(index, oscillator.attackSeconds, oscillator.releaseSeconds);
       });
 
+      setMasterVolume(snapshot.masterFX.masterVolume);
+      setLimiterThreshold(snapshot.masterFX.limiterThresholdDb);
+      setReverbWet(snapshot.masterFX.reverbWet);
+      setReverbDecay(snapshot.masterFX.reverbDecay);
+      setReverbPreDelay(snapshot.masterFX.reverbPreDelay);
+      setAutoPannerRate(snapshot.masterFX.autoPannerRate);
+      setAutoPannerDepth(snapshot.masterFX.autoPannerDepth);
+      setEqGain('low', snapshot.masterFX.eqLowGain);
+      setEqGain('mid', snapshot.masterFX.eqMidGain);
+      setEqGain('high', snapshot.masterFX.eqHighGain);
+      setEqEnabled(snapshot.masterFX.eqEnabled);
+      setStereoWidth(snapshot.masterFX.stereoWidth);
+      setDelayWet(snapshot.masterFX.delayWet);
+      setDelayTime(snapshot.masterFX.delayTime);
+      setDelayFeedback(snapshot.masterFX.delayFeedback);
+      setDelayEnabled(snapshot.masterFX.delayEnabled);
+      setChorusWet(snapshot.masterFX.chorusWet);
+      setChorusRate(snapshot.masterFX.chorusRate);
+      setChorusDepth(snapshot.masterFX.chorusDepth);
+      setChorusEnabled(snapshot.masterFX.chorusEnabled);
+      setNoiseEnabled(snapshot.noiseEnabled);
+      setModulationRate(snapshot.modulation.rate);
+      setModulationDepth(snapshot.modulation.depth);
+      Object.entries(snapshot.modulation.targets).forEach(([target, enabled]) => {
+        setModulationTarget(target as keyof ModulationState['targets'], enabled);
+      });
+      setModulationMode(snapshot.modulation.mode);
+      setTextureLayerType(snapshot.textureLayer.type);
+      setTextureLayerGain(snapshot.textureLayer.gain);
+      setTextureLayerTone(snapshot.textureLayer.tone);
+      setTextureLayerWidth(snapshot.textureLayer.width);
+      setTextureLayerMotion(snapshot.textureLayer.motion);
+      setTextureLayerEnabled(snapshot.textureLayer.enabled);
+      setActivePresetIdentity(snapshot.activePresetIdentity);
       binauralSnapshotRef.current = null;
-    }
-
-    if (masterFXSnapshot) {
-      setMasterVolume(masterFXSnapshot.masterVolume);
-      setReverbWet(masterFXSnapshot.reverbWet);
-      setReverbDecay(masterFXSnapshot.reverbDecay);
-      setAutoPannerRate(masterFXSnapshot.autoPannerRate);
-      setAutoPannerDepth(masterFXSnapshot.autoPannerDepth);
-      binauralMasterFXSnapshotRef.current = null;
     }
 
     setStatusMessage('Restored oscillator and master effect settings from before binaural mode.');
@@ -1038,6 +1252,15 @@ export default function Home() {
     analytics.trackPresetSave(trimmedName);
     setPresetName('');
     setShareMessage(`Saved preset: ${trimmedName}`);
+  };
+
+  const handleLoadPreset = (id: string, name: string) => {
+    binauralSnapshotRef.current = null;
+    setPendingBinauralActivation(null);
+    setBinauralMode(false);
+    loadPreset(id);
+    analytics.trackPresetLoad(name, 'local');
+    setShareMessage(`Loaded preset: ${name}`);
   };
 
   const handleSharePreset = async () => {
@@ -1090,27 +1313,38 @@ export default function Home() {
   };
 
   const handleStartRecording = async () => {
-    if (!isPlaying) return;
-
-    const activeEngine = ensureEngine();
-
-    await activeEngine.startRecording(recordingMode);
-    setIsRecording(true);
-    setStatusMessage(`Recording started: ${getRecordingModeLabel(recordingMode)}.`);
-  };
-
-  const handleStopRecording = async () => {
-    if (!isRecording) return;
+    if (!isPlaying || pendingExport || isFinalizingRecording) return;
 
     try {
       const activeEngine = ensureEngine();
-      const blob = await activeEngine.stopRecording();
-      const exportBlob = await createExportBlob(blob, exportFormat, exportSampleRate);
+      const config: FrozenRecordingConfig = {
+        mode: recordingMode,
+        format: exportFormat,
+        sampleRate: exportSampleRate,
+        startedAt: Date.now(),
+      };
+
+      recordingConfigRef.current = config;
+      await activeEngine.startRecording(config.mode);
+      setIsRecording(true);
+      setStatusMessage(`Recording started: ${getRecordingModeLabel(config.mode)}.`);
+    } catch (err) {
+      recordingConfigRef.current = null;
+      console.error('Recording start error:', err);
+      setStatusMessage('Recording could not start.');
+    }
+  };
+
+  const downloadRecording = async (
+    recording: Blob,
+    config: FrozenRecordingConfig
+  ): Promise<string> => {
+      const exportBlob = await createExportBlob(recording, config.format, config.sampleRate);
       const url = URL.createObjectURL(exportBlob);
       const anchor = document.createElement('a');
       const extension = getRecordingExtension(exportBlob.type);
       const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-      const filename = `auralis-${timestamp}-${recordingMode}.${extension}`;
+      const filename = `auralis-${timestamp}-${config.mode}.${extension}`;
 
       anchor.href = url;
       anchor.download = filename;
@@ -1121,24 +1355,159 @@ export default function Home() {
 
       URL.revokeObjectURL(url);
 
-      setIsRecording(false);
       analytics.trackExport();
       setLastExportName(filename);
-      setStatusMessage(
-        `Recording exported: ${filename}. ${getRecordingModeLabel(recordingMode)}. ${
-          exportFormat === 'wav'
-            ? `Rendered WAV at ${exportSampleRate} kHz.`
-            : `Browser encoded ${blob.type || extension}.`
-        }`
-      );
-    } catch (err) {
-      console.error('Recording error:', err);
-      setIsRecording(false);
-      setStatusMessage('Recording export failed.');
+
+      return filename;
+  };
+
+  const finalizeRecording = async (
+    reason: RecordingStopReason,
+    downloadImmediately: boolean
+  ): Promise<void> => {
+    if (recordingFinalizationRef.current) {
+      return recordingFinalizationRef.current;
+    }
+
+    const finalization = (async () => {
+      const activeEngine = ensureEngine();
+      if (!activeEngine.isCurrentlyRecording()) {
+        setIsRecording(false);
+        recordingConfigRef.current = null;
+        return;
+      }
+
+      const config = recordingConfigRef.current ?? {
+        mode: activeEngine.getRecordingMode(),
+        format: exportFormat,
+        sampleRate: exportSampleRate,
+        startedAt: Date.now(),
+      };
+
+      setIsFinalizingRecording(true);
+
+      try {
+        const recording = await activeEngine.stopRecording();
+        setIsRecording(false);
+
+        if (downloadImmediately) {
+          const filename = await downloadRecording(recording, config);
+          setStatusMessage(
+            `Recording exported: ${filename}. ${getRecordingModeLabel(config.mode)}. ${
+              config.format === 'wav'
+                ? `Rendered WAV at ${config.sampleRate} kHz.`
+                : `Browser encoded ${recording.type || getRecordingExtension(recording.type)}.`
+            }`
+          );
+          return;
+        }
+
+        setPendingExport({
+          id: `pending-${Date.now()}`,
+          recording,
+          config,
+          stoppedAt: Date.now(),
+          reason: reason as Exclude<RecordingStopReason, 'manual'>,
+        });
+        setStatusMessage('Recording finalized. Download or discard the pending export.');
+      } catch (err) {
+        console.error('Recording finalization error:', err);
+        setIsRecording(false);
+        setStatusMessage('Recording finalization failed.');
+      } finally {
+        recordingConfigRef.current = null;
+        setIsFinalizingRecording(false);
+      }
+    })();
+
+    recordingFinalizationRef.current = finalization;
+
+    try {
+      await finalization;
+    } finally {
+      recordingFinalizationRef.current = null;
     }
   };
 
-  const currentPreset = presets[0];
+  const handleStopRecording = async () => {
+    if (!isRecording && !ensureEngine().isCurrentlyRecording()) return;
+
+    await finalizeRecording('manual', true);
+  };
+
+  const handleDownloadPendingExport = async () => {
+    if (!pendingExport || isFinalizingRecording) return;
+
+    setIsFinalizingRecording(true);
+
+    try {
+      const filename = await downloadRecording(pendingExport.recording, pendingExport.config);
+      setPendingExport(null);
+      setStatusMessage(`Pending recording exported: ${filename}.`);
+    } catch (err) {
+      console.error('Pending recording export error:', err);
+      setStatusMessage('Pending recording export failed. The recording is still available.');
+    } finally {
+      setIsFinalizingRecording(false);
+    }
+  };
+
+  const handleDiscardPendingExport = () => {
+    if (!pendingExport || isFinalizingRecording) return;
+
+    setPendingExport(null);
+    setStatusMessage('Pending recording discarded.');
+  };
+
+  useEffect(() => {
+    const isTypingTarget = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLElement)) return false;
+
+      return ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable;
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) return;
+
+      if (event.code === 'Space') {
+        event.preventDefault();
+        if (isPlaying) {
+          handleStop();
+        } else {
+          handleStart();
+        }
+      }
+
+      if (event.key.toLowerCase() === 'r') {
+        event.preventDefault();
+        if (isRecording) {
+          handleStopRecording();
+        } else if (isPlaying) {
+          handleStartRecording();
+        }
+      }
+
+      if (event.key === 'Escape' && isBinauralMode) {
+        event.preventDefault();
+        exitBinaural();
+      }
+
+      if (event.key.toLowerCase() === 's' && presetName.trim()) {
+        event.preventDefault();
+        handleSavePreset();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  });
+
+  const currentPreset = activePresetId
+    ? presets.find((preset) => preset.id === activePresetId)
+    : undefined;
   const activeStatus = getPlaybackStatus(isPlaying, isFadingOut);
   const remainingLabel = timerRemaining !== null ? formatTime(timerRemaining) : '--:--';
   const builtInPresetCount = presets.filter((preset) => preset.id.startsWith('built-in-')).length;
@@ -1161,7 +1530,10 @@ export default function Home() {
       ? BINAURAL_PRESETS.find((preset) => preset.freq === pendingBinauralPair.beatFrequency)
           ?.name ?? 'Custom'
       : null);
-  const currentPresetName = currentPreset?.name ?? 'Manual Session';
+  const currentPresetName = activePresetName ?? 'Manual Session';
+  const currentPresetDisplayName = isActivePresetModified
+    ? `${currentPresetName} · Modified`
+    : currentPresetName;
   const creatorDraft = buildCreatorExportDraft({
     creatorSession,
     presetName: currentPresetName,
@@ -1259,7 +1631,7 @@ export default function Home() {
               {!isRecording ? (
                 <button
                   onClick={handleStartRecording}
-                  disabled={!isPlaying}
+                  disabled={!isPlaying || Boolean(pendingExport) || isFinalizingRecording}
                   aria-label={`Start ${recordingMode} recording`}
                   className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-6 py-2.5 text-sm font-semibold text-slate-100 transition hover:border-cyan-400/40 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-50 sm:w-[190px]"
                 >
@@ -1269,11 +1641,12 @@ export default function Home() {
               ) : (
                 <button
                   onClick={handleStopRecording}
+                  disabled={isFinalizingRecording}
                   aria-label="Stop recording and export audio"
                   className="inline-flex w-full animate-pulse items-center justify-center gap-2 rounded-xl bg-red-600 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-red-500 sm:w-[190px]"
                 >
                   <Square size={14} fill="currentColor" />
-                  Stop Rec
+                  {isFinalizingRecording ? 'Finalizing…' : 'Stop Rec'}
                 </button>
               )}
             </div>
@@ -1326,7 +1699,7 @@ export default function Home() {
                   <Moon size={28} className="text-violet-200" />
                 </div>
                 <div>
-                  <p className="font-semibold text-slate-100">{currentPreset?.name ?? 'Manual Session'}</p>
+                  <p className="font-semibold text-slate-100">{currentPresetDisplayName}</p>
                   <p className="text-xs text-cyan-300">{builtInPresetCount} built-in presets</p>
                 </div>
               </div>
@@ -1635,15 +2008,54 @@ export default function Home() {
                 </label>
                 <button
                   onClick={isRecording ? handleStopRecording : handleStartRecording}
-                  disabled={!isPlaying && !isRecording}
+                  disabled={
+                    isFinalizingRecording ||
+                    (!isPlaying && !isRecording) ||
+                    (!isRecording && Boolean(pendingExport))
+                  }
                   className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-slate-100 transition hover:border-cyan-400/40 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Download size={15} />
-                  {isRecording ? 'Export Recording' : 'Arm Recorder'}
+                  {isFinalizingRecording
+                    ? 'Finalizing…'
+                    : isRecording
+                      ? 'Export Recording'
+                      : 'Arm Recorder'}
                 </button>
                 <p className="text-xs leading-5 text-slate-500">
                   {getRecordingModeDescription(recordingMode)} Browser-native capture; WAV targets render on export.
                 </p>
+                {pendingExport && (
+                  <div className="space-y-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3" role="status">
+                    <div>
+                      <p className="text-sm font-semibold text-amber-100">Pending Export</p>
+                      <p className="mt-1 text-xs leading-5 text-amber-100/70">
+                        {pendingExport.reason === 'timer_complete'
+                          ? 'The session timer completed.'
+                          : 'Playback stopped.'}{' '}
+                        {getRecordingModeLabel(pendingExport.config.mode)} · {pendingExport.config.format.toUpperCase()} · {pendingExport.config.sampleRate} kHz
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={handleDownloadPendingExport}
+                        disabled={isFinalizingRecording}
+                        className="rounded-lg bg-amber-300 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-amber-200 disabled:opacity-50"
+                      >
+                        Download
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDiscardPendingExport}
+                        disabled={isFinalizingRecording}
+                        className="rounded-lg border border-white/10 bg-white/[0.05] px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-white/[0.1] disabled:opacity-50"
+                      >
+                        Discard
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </GlassPanel>
 
@@ -1656,7 +2068,24 @@ export default function Home() {
           </aside>
         <GlassPanel id="sound-lab" className="p-5 xl:col-span-3">
           <SectionHeader title="Master Chain" description="Final signal shaping before output and recording." />
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+          {isBinauralMode && (
+            <div className="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100" role="status">
+              Binaural Lock is active. Effects, movement, noise, and textures are bypassed until you exit binaural mode.
+            </div>
+          )}
+          <MobileDisclosureButton
+            label="Master Chain Controls"
+            expanded={masterChainMobileOpen}
+            controls="master-chain-controls"
+            onToggle={() => setMasterChainMobileOpen((open) => !open)}
+          />
+          <fieldset
+            id="master-chain-controls"
+            disabled={isBinauralMode}
+            className={`${masterChainMobileOpen ? 'block' : 'hidden'} disabled:opacity-60 md:block`}
+          >
+            <legend className="sr-only">Master chain controls</legend>
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
             <Card className={`space-y-3 p-4 ${noiseEnabled ? 'border-cyan-400/30 shadow-[0_0_32px_rgba(34,211,238,0.1)]' : ''}`}>
               <div className="flex items-center justify-between">
                 <h3 className="inline-flex items-center gap-2 text-sm font-semibold text-slate-200">
@@ -1859,7 +2288,7 @@ export default function Home() {
                 </h3>
                 <ToggleSwitch
                   checked={masterFX.eqEnabled}
-                  onChange={setEqEnabled}
+                  onChange={handleEqEnabledChange}
                   label="Toggle master EQ"
                 />
               </div>
@@ -1928,7 +2357,7 @@ export default function Home() {
                   <span className="text-xs font-semibold text-slate-300">Delay</span>
                   <ToggleSwitch
                     checked={masterFX.delayEnabled}
-                    onChange={setDelayEnabled}
+                    onChange={handleDelayEnabledChange}
                     label="Toggle delay"
                   />
                 </div>
@@ -1936,7 +2365,7 @@ export default function Home() {
                   <span className="text-xs font-semibold text-slate-300">Chorus</span>
                   <ToggleSwitch
                     checked={masterFX.chorusEnabled}
-                    onChange={setChorusEnabled}
+                    onChange={handleChorusEnabledChange}
                     label="Toggle chorus"
                   />
                 </div>
@@ -2093,14 +2522,19 @@ export default function Home() {
                 ))}
               </div>
             </Card>
-          </div>
+            </div>
+          </fieldset>
         </GlassPanel>
 
         <section className="space-y-4 xl:col-span-3">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-sm font-semibold text-slate-100">Oscillator Rack</h2>
-              <p className="text-sm text-slate-500">Four tone layers for frequency, gain, pan, waveform, and tremolo.</p>
+              <p className="text-sm text-slate-500">
+                {isBinauralMode
+                  ? 'Strict carrier pair is locked until binaural mode exits.'
+                  : 'Four tone layers for frequency, gain, pan, waveform, and tremolo.'}
+              </p>
             </div>
             <div className="hidden items-center gap-2 md:flex">
               <div className="flex rounded-full border border-white/10 bg-slate-950/60 p-1">
@@ -2112,8 +2546,9 @@ export default function Home() {
                     key={mode.value}
                     type="button"
                     onClick={() => handleFrequencyLinkModeChange(mode.value as FrequencyLinkMode)}
+                    disabled={isBinauralMode}
                     aria-pressed={frequencyLinkMode === mode.value}
-                    className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                    className={`rounded-full px-3 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
                       frequencyLinkMode === mode.value
                         ? 'bg-cyan-400/20 text-cyan-200 shadow-[0_0_18px_rgba(34,211,238,0.18)]'
                         : 'text-slate-500 hover:text-slate-200'
@@ -2128,7 +2563,11 @@ export default function Home() {
               </span>
             </div>
           </div>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <fieldset
+            disabled={isBinauralMode}
+            className="grid grid-cols-1 gap-4 disabled:opacity-70 md:grid-cols-2 lg:grid-cols-4"
+          >
+            <legend className="sr-only">Oscillator rack controls</legend>
             {oscillators.map((oscillator, index) => (
               <OscillatorPanel
                 key={index}
@@ -2164,7 +2603,7 @@ export default function Home() {
                 }
               />
             ))}
-          </div>
+          </fieldset>
         </section>
 
         <GlassPanel id="presets" className="p-5 xl:col-span-3">
@@ -2212,7 +2651,16 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="mb-4 flex flex-wrap gap-2">
+          <MobileDisclosureButton
+            label="Preset Filters"
+            expanded={presetFiltersMobileOpen}
+            controls="preset-filter-controls"
+            onToggle={() => setPresetFiltersMobileOpen((open) => !open)}
+          />
+          <div
+            id="preset-filter-controls"
+            className={`${presetFiltersMobileOpen ? 'flex' : 'hidden'} mb-4 flex-wrap gap-2 md:flex`}
+          >
             {PRESET_CATEGORY_OPTIONS.map((category) => {
               const isActiveCategory = presetCategory === category.value;
 
@@ -2237,7 +2685,16 @@ export default function Home() {
             })}
           </div>
 
-          <div className="mb-5 grid gap-4 rounded-2xl border border-white/10 bg-slate-950/35 p-4 lg:grid-cols-[1fr_1fr_auto]">
+          <MobileDisclosureButton
+            label="Creator Session Fields"
+            expanded={creatorMobileOpen}
+            controls="creator-session-fields"
+            onToggle={() => setCreatorMobileOpen((open) => !open)}
+          />
+          <div
+            id="creator-session-fields"
+            className={`${creatorMobileOpen ? 'grid' : 'hidden'} mb-5 gap-4 rounded-2xl border border-white/10 bg-slate-950/35 p-4 md:grid lg:grid-cols-[1fr_1fr_auto]`}
+          >
             <div className="grid gap-3 sm:grid-cols-2 lg:col-span-2 xl:grid-cols-3">
               <label className="block text-xs text-slate-500">
                 Creator Title
@@ -2341,8 +2798,18 @@ export default function Home() {
             </div>
           </div>
 
-          {filteredPresets.length > 0 ? (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
+          <MobileDisclosureButton
+            label={`Preset Results (${filteredPresets.length})`}
+            expanded={presetResultsMobileOpen}
+            controls="preset-results"
+            onToggle={() => setPresetResultsMobileOpen((open) => !open)}
+          />
+          <div
+            id="preset-results"
+            className={`${presetResultsMobileOpen ? 'block' : 'hidden'} md:block`}
+          >
+            {filteredPresets.length > 0 ? (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
               {filteredPresets.map((preset) => {
                 const isBuiltInPreset = preset.id.startsWith('built-in-');
 
@@ -2398,11 +2865,7 @@ export default function Home() {
                     </div>
                     <div className="flex shrink-0 gap-2">
                       <button
-                        onClick={() => {
-                          loadPreset(preset.id);
-                          analytics.trackPresetLoad(preset.name, 'local');
-                          setShareMessage(`Loaded preset: ${preset.name}`);
-                        }}
+                        onClick={() => handleLoadPreset(preset.id, preset.name)}
                         className="rounded-lg bg-white/[0.06] px-3 py-2 text-xs font-medium text-slate-100 transition hover:bg-cyan-400/10"
                         aria-label={`Load preset ${preset.name}`}
                       >
@@ -2425,16 +2888,17 @@ export default function Home() {
                   </div>
                 );
               })}
-            </div>
-          ) : (
-            <p className="text-sm text-slate-500">
-              {presetSearch.trim()
-                ? 'No presets match that search.'
-                : presetCategory !== 'all'
-                  ? 'No presets match this category yet.'
-                  : 'No presets saved yet. Create a soundscape and save it.'}
-            </p>
-          )}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">
+                {presetSearch.trim()
+                  ? 'No presets match that search.'
+                  : presetCategory !== 'all'
+                    ? 'No presets match this category yet.'
+                    : 'No presets saved yet. Create a soundscape and save it.'}
+              </p>
+            )}
+          </div>
         </GlassPanel>
 
         <footer className="px-4 pb-5 text-center text-xs text-slate-600 md:px-6 xl:col-span-3 xl:px-8">

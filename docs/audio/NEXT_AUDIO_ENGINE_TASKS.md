@@ -29,6 +29,11 @@ Implemented in the latest audio expansion:
 - Master EQ, stereo width, delay, chorus, and reverb pre-delay controls.
 - Export-ready preset metadata.
 - Playwright smoke tests for the main dashboard controls.
+- Strict binaural carrier isolation with complete snapshot restoration and control locking.
+- Pre/post-limiter sample measurement with direct Tone.js limiter-reduction telemetry.
+- Active preset identity and unsaved-edit tracking.
+- Fade-tail recording finalization with downloadable/discardable pending exports.
+- TypeScript, Next.js 16, CI browser gates, and mobile rack coverage.
 
 ## 1. Add Output Metering and Limiter Feedback
 
@@ -37,7 +42,7 @@ Status: Implemented.
 Implemented:
 
 - `src/utils/audioMeter.ts` provides RMS/peak, dB conversion, threshold classification, and safe silent defaults.
-- `src/lib/audioEngine.ts` exposes `getOutputMeter()` from the existing post-limiter analyser.
+- `src/lib/audioEngine.ts` exposes `getOutputMeter()` from matching pre/post-limiter analysers and the limiter node.
 - `src/components/OutputMeter.tsx` displays RMS, peak, peak hold, and Safe/Output Hot/Limiter Active/Clip Risk status near master volume.
 - The existing `Tone.Limiter(-1)` remains the only limiter in the output path.
 - Dry export now bypasses wet FX but records through a dedicated `Tone.Limiter(-1)` before the dry recorder.
@@ -48,7 +53,7 @@ Implemented:
 
 Limitations:
 
-- Limiter activity is currently inferred from post-limiter peak level near the limiter ceiling. Tone.js does not expose exact gain-reduction telemetry from `Tone.Limiter`.
+- Limiter reduction is read from `Tone.Limiter.reduction`; level classifications also use measured input/output samples.
 - The meter is sample-window based and intended as practical UI feedback, not calibrated mastering-grade measurement.
 
 Goal:

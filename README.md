@@ -1,378 +1,123 @@
 # Auralis
 
-Auralis is a browser-based somatic frequency generator and binaural entrainment prototype built with Next.js, React, Tone.js, Tailwind CSS, and Zustand.
+Auralis is a browser-based sound laboratory for layered synthesis, binaural-style listening, procedural textures, session design, visualization, and local recording/export. It is built with Next.js, React, TypeScript, Tone.js, Tailwind CSS, and Zustand.
 
-The current application is designed as a high-control sound laboratory for testing generated tones, binaural beat presets, stereo motion, tremolo modulation, reverb, session timing, realtime visualization, local presets, and WAV export.
-
-> **Important:** Auralis is an experimental sound and wellness tool. It is not medical software and should not be treated as a diagnostic, therapeutic, or clinical device. Use comfortable listening levels, especially with headphones.
+> **Important:** Auralis is experimental audio software, not a medical device. Start at low volume, use headphones carefully, and stop if listening becomes uncomfortable. Presets are designed around listening goals; they do not guarantee or cause specific mental states.
 
 ## Current status
 
-Auralis is ready for local development and first-pass browser testing.
+The engineering release gates pass on the current `main` branch. Manual listening QA for every built-in preset remains the final release gate; use [the preset QA log](docs/audio/PRESET_QA_LOG.md) to record it.
 
-The current `main` branch includes:
+Current capabilities include:
 
-- Next.js App Router application shell
-- Tone.js-powered synthesis engine
-- Four independent oscillator channels
-- Per-oscillator frequency, gain, waveform, pan, and tremolo controls
-- Master reverb and auto-panner controls
-- Binaural beat preset buttons
-- Audio-reactive canvas visualizer
-- Session timer with automatic fade-out
-- Browser wake-lock support while audio is active
-- Local preset saving/loading/deleting through Zustand persistence
-- WAV recording/export of generated audio
-- Optional Plausible analytics configuration
+- Four oscillators with waveform, frequency, detune, phase, gain, pan, envelopes, tremolo, mute/solo, and harmonic linking
+- Strict binaural mode with isolated left/right carriers and complete state restoration on exit
+- Filtered noise and procedural rain, storm, wind, ocean, and drone textures
+- Reverb, auto-panner, EQ, delay, chorus, stereo width, and a configurable safety limiter
+- Pre/post-limiter output metering with measured limiter reduction
+- Preset metadata, search, categories, local persistence, sharing, and modification tracking
+- Session timer with cancellation-safe fades and wake-lock support
+- Wet or dry browser recording, WAV rendering, and recoverable pending exports after playback stops
+- Responsive premium dashboard with compact mobile rack controls
 
 ## Tech stack
 
-- **Framework:** Next.js 14
+- **Framework:** Next.js 16 (App Router)
 - **UI:** React 18 + Tailwind CSS
-- **Audio:** Tone.js
-- **State:** Zustand + Zustand persist middleware
+- **Audio:** Tone.js / Web Audio API
+- **State:** Zustand with persisted local presets
 - **Language:** TypeScript
-- **Analytics:** Optional Plausible.io integration
+- **Tests:** Vitest + Playwright
+- **Analytics:** Optional Plausible integration
 
 ## Quick start
-
-Clone the repository:
 
 ```bash
 git clone https://github.com/051-lab/auralis.git
 cd auralis
-```
-
-Install dependencies:
-
-```bash
 npm install
-```
-
-Create a local environment file:
-
-```bash
 cp .env.example .env.local
-```
-
-Start the development server:
-
-```bash
 npm run dev
 ```
 
-Open the app in your browser:
+Open `http://localhost:3000`. If that port is occupied, Next.js prints the alternate port it selected.
 
-```text
-http://localhost:3000
-```
-
-## Available scripts
+## Validation
 
 ```bash
-npm run dev      # Start local development server
-npm run build    # Create a production build
-npm run start    # Run the production build
-npm run lint     # Run Next.js linting
+npm run lint       # ESLint
+npm run typecheck  # Generate Next route types and run TypeScript
+npm test           # Vitest unit/integration tests
+npm run build      # Production build
+npm run test:e2e   # Playwright browser release gate
 ```
 
-## Audio research docs
+## Audio architecture
 
-The audio-side planning docs live in `docs/audio/`:
+The four oscillator channels, filtered noise, and procedural texture sources feed a shared master chain:
 
-- [Development Roadmap](docs/DEVELOPMENT_ROADMAP.md)
-- [Audio Architecture Audit](docs/audio/AUDIO_ARCHITECTURE_AUDIT.md)
-- [Reading Roadmap](docs/audio/READING_ROADMAP.md)
-- [Research Implementation Notes](docs/audio/RESEARCH_IMPLEMENTATION_NOTES.md)
-- [Audio Improvement Backlog](docs/audio/AUDIO_IMPROVEMENT_BACKLOG.md)
-- [Preset Design Guide](docs/audio/PRESET_DESIGN_GUIDE.md)
-- [Responsible Audio Guidelines](docs/audio/RESPONSIBLE_AUDIO_GUIDELINES.md)
-- [Browser Audio Compatibility Checklist](docs/audio/BROWSER_AUDIO_COMPATIBILITY_CHECKLIST.md)
-- [Next Audio Engine Tasks](docs/audio/NEXT_AUDIO_ENGINE_TASKS.md)
+```text
+Oscillators / Noise / Texture
+  -> masterGain -> userVolume -> transportFade
+  -> Reverb -> AutoPanner -> EQ -> Delay -> Chorus -> Stereo Width
+  -> pre-limiter analyser -> Limiter -> post-limiter analyser
+  -> Destination + wet recorder
 
-## Environment variables
-
-Auralis ships with `.env.example`:
-
-```env
-NEXT_PUBLIC_ANALYTICS_ENABLED=false
-NEXT_PUBLIC_ANALYTICS_ID=your-plausible-domain.com
-NEXT_PUBLIC_APP_URL=http://localhost:3000
+transportFade -> dry recorder limiter -> dry recorder
 ```
 
-For initial local testing, analytics can remain disabled:
+The output meter compares pre- and post-limiter samples and reads Tone.js limiter reduction. It is practical safety feedback, not mastering-grade true-peak instrumentation.
 
-```env
-NEXT_PUBLIC_ANALYTICS_ENABLED=false
-```
+Strict binaural mode snapshots the complete affected sound state, isolates two sine carriers hard left/right, disables movement and ambience paths that can blur their channel relationship, and locks conflicting controls until exit. Exiting restores the prior state.
 
-Enable Plausible only after you have a real domain configured:
+## Recording behavior
 
-```env
-NEXT_PUBLIC_ANALYTICS_ENABLED=true
-NEXT_PUBLIC_ANALYTICS_ID=your-domain.com
-```
+- **Wet export** captures the processed, limited master output.
+- **Dry export** taps before master effects and passes through a dedicated recording limiter.
+- Stopping playback or reaching a timer endpoint captures the audible fade tail, then presents a pending export that can be downloaded or discarded.
+- Explicitly stopping the recorder exports immediately.
+- Browser recording support and decode behavior can vary by browser.
 
 ## Project structure
 
 ```text
-src/
-  app/
-    globals.css          Global Tailwind and custom styles
-    layout.tsx           Root layout, metadata, optional analytics script
-    page.tsx             Main Auralis UI and control wiring
-  components/
-    OscillatorPanel.tsx  Per-oscillator controls
-    Timer.tsx            Session timer and fade-out behavior
-    Visualizer.tsx       Audio-reactive canvas visualizer
-  lib/
-    analytics.ts         Optional Plausible event tracking
-    audioEngine.ts       Tone.js synthesis, FX, analyser, and recorder engine
-    useAnalytics.ts      Route-change analytics hook
-  store/
-    useAuralisStore.ts   Zustand state and persisted presets
-  utils/
-    audioMath.ts         Logarithmic frequency conversion utilities
+src/app/                 Application shell and dashboard wiring
+src/components/          Audio controls, timer, visualizer, and meters
+src/lib/audioEngine.ts   Tone.js graph, transport, analyser, and recording
+src/store/               Persisted application and preset state
+src/utils/               Pure audio, preset, export, and UI helpers
+tests/                   Playwright browser workflows
+docs/audio/              Architecture, research, safety, and QA guidance
+knowledge/               Local research library (not application runtime data)
 ```
 
-## Feature overview
-
-### Audio engine
-
-The core audio engine creates four Tone.js oscillator channels. Each channel routes through panning and gain before reaching the shared master chain.
-
-Current master chain:
-
-```text
-Oscillators -> Panner -> Gain -> Master Gain -> Volume -> Reverb -> AutoPanner -> Analyser -> Destination
-                                                                └──────────────-> Recorder
-```
-
-Supported channel controls:
-
-- Frequency
-- Gain
-- Waveform: sine, square, sawtooth, triangle
-- Stereo pan
-- Tremolo enable/disable
-- Tremolo rate
-- Tremolo depth
-
-Supported master controls:
-
-- Reverb wet/dry
-- Auto-panner speed
-- Auto-panner depth
-
-### Binaural mode
-
-Auralis includes preset binaural beat buttons:
-
-| Preset | Beat frequency |
-| --- | ---: |
-| Delta Sleep | 2 Hz |
-| Theta Meditation | 6 Hz |
-| Alpha Focus | 10 Hz |
-| Beta Alertness | 20 Hz |
-| Gamma Insight | 40 Hz |
-
-Current binaural behavior:
-
-- Oscillator 1 is set to the base frequency and panned hard left.
-- Oscillator 2 is set to base frequency + beat frequency and panned hard right.
-- Oscillators 3 and 4 are muted.
-
-### Visualizer
-
-The visualizer uses the Tone.js analyser output to draw a glowing, audio-reactive orb and circular waveform ring on a canvas.
-
-### Presets
-
-Users can save, load, and delete presets locally. Presets currently store:
-
-- Oscillator settings
-- Master FX settings
-- Preset name
-- Creation timestamp
-
-Preset persistence is local to the browser through Zustand persist storage.
-
-### Recording and export
-
-When audio is playing, the app can record the generated output and export it as a `.wav` file.
-
-### Timer
-
-The session timer currently supports:
-
-- 15 minutes
-- 30 minutes
-- 60 minutes
-
-When the timer completes, Auralis fades the audio out over 10 seconds.
-
-## Initial testing checklist
-
-Use this checklist after pulling the repo and running the app locally.
-
-### 1. Install and boot
-
-```bash
-npm install
-npm run dev
-```
-
-Expected result:
-
-- The app boots at `http://localhost:3000`.
-- The Auralis header and visualizer are visible.
-- No fatal browser console errors appear on first load.
-
-### 2. Start and stop audio
-
-- Click **Start Audio**.
-- Confirm the browser allows audio playback after the user gesture.
-- Confirm the status indicator changes to active.
-- Click **Stop**.
-- Confirm the audio fades/stops.
-
-### 3. Test oscillator controls
-
-For each oscillator:
-
-- Move the frequency slider.
-- Adjust gain.
-- Change waveform.
-- Pan left/right.
-- Enable tremolo.
-- Adjust tremolo speed and depth.
-
-Expected result:
-
-- Sound changes should be audible while audio is running.
-- The visualizer should react to active audio.
-
-### 4. Test binaural presets
-
-- Start audio.
-- Click each binaural preset.
-- Use headphones for stereo verification.
-- Confirm oscillator 1 and 2 create a hard-left/hard-right beat relationship.
-- Click **Exit Binaural Mode**.
-
-Expected result:
-
-- Binaural mode activates without crashing.
-- Oscillators 3 and 4 mute during binaural mode.
-
-### 5. Test session timer
-
-- Start audio.
-- Select 15m, 30m, or 60m.
-- Confirm countdown begins.
-- Confirm the timer can be cleared.
-
-For faster development testing, temporarily add a shorter timer value in `src/components/Timer.tsx`.
-
-### 6. Test presets
-
-- Create a sound configuration.
-- Enter a preset name.
-- Click **Save Preset**.
-- Reload the page.
-- Confirm the preset still appears.
-- Load the preset.
-- Delete the preset.
-
-### 7. Test recording/export
-
-- Start audio.
-- Click **Record**.
-- Let it record briefly.
-- Click **Stop Rec**.
-- Confirm a `.wav` file downloads.
-- Open the file locally and verify audio was captured.
-
-### 8. Run production checks
-
-```bash
-npm run build
-npm run lint
-```
-
-Expected result:
-
-- Production build completes.
-- Linting either passes or exposes issues that can be triaged.
-
-## Known implementation notes
-
-These are worth checking during initial testing:
-
-1. **Preset loading may need engine synchronization.**
-   The store updates preset state, but the live Tone.js engine may need explicit setters after loading a preset while audio is already playing.
-
-2. **URL preset loading is only stubbed.**
-   `?preset=` is detected, but full URL import/export behavior is not implemented yet.
-
-3. **Tremolo disable behavior may reset gain.**
-   Disabling tremolo currently resets the oscillator gain path to a default value, so volume jumps should be tested.
-
-4. **Timer completion may double-trigger stop tracking.**
-   The timer calls fade-out and then calls the parent stop handler. This should be reviewed if analytics accuracy matters.
-
-5. **Analytics script loading should be cleaned up before production.**
-   The layout and analytics utility both include script-loading behavior. Keep analytics disabled during local testing unless needed.
-
-6. **There is no limiter yet.**
-   Multiple oscillators plus reverb and panning can become loud. Add a limiter before pushing intense presets or public demos.
-
-7. **The app is currently a technical sound lab, not yet a simplified consumer experience.**
-   A future preset-first or cinematic mode would make it feel closer to a polished wellness/frequency app.
-
-## Suggested next development milestones
-
-### Milestone 1: Stabilize the prototype
-
-- Add a master limiter to the audio chain.
-- Fix preset loading so UI state and live audio engine always match.
-- Add a short developer timer option for testing.
-- Confirm recording/export works across Chrome, Edge, and Safari.
-- Add basic automated checks or a CI workflow.
-
-### Milestone 2: Productize the experience
-
-- Add named one-click sound journeys.
-- Create a simplified session mode separate from the advanced oscillator editor.
-- Add onboarding copy and headphone/volume safety warnings.
-- Add import/export/shareable presets.
-- Add a more cinematic visual mode.
-
-### Milestone 3: Prepare for public release
-
-- Add production metadata and real Open Graph images.
-- Add deployment instructions.
-- Add privacy policy notes if analytics are enabled.
-- Add accessibility pass for controls and keyboard navigation.
-- Add a stronger product landing section.
-
-## Safety notes
-
-- Start at a low volume.
-- Be careful with headphones, especially high-frequency tones.
-- Avoid sudden gain increases while multiple oscillators are active.
-- Do not use while driving or operating machinery.
-- Stop immediately if sound causes discomfort, dizziness, headache, or anxiety.
-- Auralis is not a replacement for professional medical or mental-health care.
-
-## Development philosophy
-
-Auralis should be treated as a fusion of:
-
-- Precision browser audio synthesis
-- Somatic/ambient sound design
-- Binaural entrainment experimentation
-- Aesthetic visual feedback
-- Preset-driven emotional experiences
-
-The current codebase already supports the technical foundation. The next major leap is making the experience feel intentional, safe, and emotionally compelling without hiding the advanced controls from users who want to experiment.
+## Research and release docs
+
+- [Development Roadmap](docs/DEVELOPMENT_ROADMAP.md)
+- [Active Development Loop](docs/ACTIVE_DEVELOPMENT_LOOP.md)
+- [Audio Architecture Audit](docs/audio/AUDIO_ARCHITECTURE_AUDIT.md)
+- [Audio Improvement Backlog](docs/audio/AUDIO_IMPROVEMENT_BACKLOG.md)
+- [Preset Design Guide](docs/audio/PRESET_DESIGN_GUIDE.md)
+- [Preset QA Log](docs/audio/PRESET_QA_LOG.md)
+- [Responsible Audio Guidelines](docs/audio/RESPONSIBLE_AUDIO_GUIDELINES.md)
+- [Reading Roadmap](docs/audio/READING_ROADMAP.md)
+- [Research Implementation Notes](docs/audio/RESEARCH_IMPLEMENTATION_NOTES.md)
+- [Browser Compatibility Checklist](docs/audio/BROWSER_AUDIO_COMPATIBILITY_CHECKLIST.md)
+- [Next Audio Engine Tasks](docs/audio/NEXT_AUDIO_ENGINE_TASKS.md)
+- [Security Notes](docs/SECURITY_NOTES.md)
+
+## Known limitations
+
+- Manual listening QA is still required for built-in presets at multiple output levels.
+- Metering is sample-window based and does not replace calibrated loudness or true-peak measurement.
+- Pending recordings are held in memory; reloading discards them after a browser warning.
+- MediaRecorder formats and Web Audio behavior vary across browsers and devices.
+- HRTF/3D spatial processing remains a separate research task requiring dedicated design and listening validation.
+
+## Responsible language
+
+Use wording such as “designed around,” “inspired by,” “intended for,” or “may support.” Do not claim that a preset heals, treats, guarantees an outcome, or puts a listener’s brain into a specific state.
+
+## License
+
+See [LICENSE](LICENSE).

@@ -105,3 +105,39 @@ export function createBinauralPair(baseFrequency: number, beatFrequency: number)
     beatAdjusted: safeBeatFrequency !== beatFrequency,
   };
 }
+
+export function parseStrictBinauralCarriers(
+  oscillators: readonly { frequency?: unknown }[] | undefined
+): BinauralPair | null {
+  const baseFrequency = oscillators?.[0]?.frequency;
+  const upperFrequency = oscillators?.[1]?.frequency;
+
+  if (
+    typeof baseFrequency !== 'number' ||
+    !Number.isFinite(baseFrequency) ||
+    typeof upperFrequency !== 'number' ||
+    !Number.isFinite(upperFrequency) ||
+    baseFrequency < MIN_BINAURAL_BASE_FREQUENCY ||
+    upperFrequency > MAX_BINAURAL_CARRIER_FREQUENCY ||
+    upperFrequency <= baseFrequency
+  ) {
+    return null;
+  }
+
+  const beatFrequency = upperFrequency - baseFrequency;
+  if (
+    beatFrequency < MIN_BINAURAL_BEAT_FREQUENCY ||
+    beatFrequency > MAX_BINAURAL_BEAT_FREQUENCY
+  ) {
+    return null;
+  }
+
+  return {
+    baseFrequency,
+    beatFrequency,
+    upperFrequency,
+    guidance: getBinauralGuidance(beatFrequency),
+    baseAdjusted: false,
+    beatAdjusted: false,
+  };
+}

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   CURRENT_PRESET_VERSION,
   getEffectiveOscillatorGain,
+  mergePersistedAuralisState,
+  migratePersistedAuralisState,
   normalizeCreatorSession,
   normalizeMasterFX,
   normalizeModulation,
@@ -11,7 +13,23 @@ import {
   normalizeOscillators,
   normalizePresetTags,
   normalizeTextureLayer,
+  useAuralisStore,
 } from './useAuralisStore';
+
+const createPersistedPreset = (id: string, createdAt = 1) => {
+  const builtIn = useAuralisStore.getState().presets[0];
+  return {
+    ...builtIn,
+    id,
+    name: `User ${id}`,
+    createdAt,
+    oscillators: builtIn.oscillators.map((oscillator) => ({ ...oscillator })),
+    masterFX: { ...builtIn.masterFX },
+    modulation: { ...builtIn.modulation, targets: { ...builtIn.modulation.targets } },
+    textureLayer: { ...builtIn.textureLayer },
+    creatorSession: { ...builtIn.creatorSession },
+  };
+};
 
 describe('store normalization', () => {
   it('normalizes missing master FX fields with current defaults', () => {
@@ -186,5 +204,149 @@ describe('store normalization', () => {
 
   it('exposes the current preset version', () => {
     expect(CURRENT_PRESET_VERSION).toBe(2);
+  });
+
+  it('migrates versionless, schema-v1, and schema-v2 user presets', () => {
+    const versionless = createPersistedPreset('preset-versionless', 1) as Record<string, unknown>;
+    delete versionless.version;
+    const schemaV1 = { ...createPersistedPreset('preset-v1', 2), version: 1 };
+    const schemaV2 = createPersistedPreset('preset-v2', 3);
+
+    const migrated = migratePersistedAuralisState(
+      { presets: [versionless, schemaV1, schemaV2] },
+      0
+    );
+
+    expect(migrated.presets.map((preset) => preset.id)).toEqual([
+      'preset-v2',
+      'preset-v1',
+      'preset-versionless',
+    ]);
+    expect(migrated.presets.every((preset) => preset.version === CURRENT_PRESET_VERSION)).toBe(
+      true
+    );
+  });
+
+  it('drops corrupt roots and future envelopes safely', () => {
+    for (const root of [null, [], 'state', 3, {}, { presets: null }]) {
+      expect(migratePersistedAuralisState(root, 0)).toEqual({ presets: [] });
+    }
+
+    expect(
+      migratePersistedAuralisState({ presets: [createPersistedPreset('preset-valid')] }, 2)
+    ).toEqual({ presets: [] });
+
+    const currentState = useAuralisStore.getState();
+    const merged = mergePersistedAuralisState(
+      { presets: null, isRecording: true, timerDuration: 900 },
+      currentState
+    );
+    expect(merged.presets).toEqual(currentState.presets);
+    expect(merged.isRecording).toBe(currentState.isRecording);
+    expect(merged.timerDuration).toBe(currentState.timerDuration);
+  });
+
+  it('drops invalid entries, future preset versions, collisions, and built-in IDs', () => {
+    const valid = createPersistedPreset('preset-valid', 10);
+    const duplicate = { ...createPersistedPreset('preset-valid', 20), name: 'Duplicate' };
+    const migrated = migratePersistedAuralisState(
+      {
+        presets: [
+          null,
+          'preset',
+          {},
+          { id: 'preset-malformed', version: 2, name: 'Looks valid' },
+          { ...createPersistedPreset('preset-future'), version: 3 },
+          createPersistedPreset('built-in-alpha-relaxed-focus-10hz'),
+          valid,
+          duplicate,
+        ],
+      },
+      0
+    );
+
+    expect(migrated.presets).toHaveLength(1);
+    expect(migrated.presets[0]).toMatchObject({ id: 'preset-valid', name: valid.name });
+  });
+
+  it('keeps only the 50 newest compatible user presets', () => {
+    const presets = Array.from({ length: 75 }, (_, index) =>
+      createPersistedPreset(`preset-${index}`, index)
+    );
+    const migrated = migratePersistedAuralisState({ presets }, 0);
+
+    expect(migrated.presets).toHaveLength(50);
+    expect(migrated.presets[0].id).toBe('preset-74');
+    expect(migrated.presets.at(-1)?.id).toBe('preset-25');
+  });
+
+  it('rehydrates presets without restoring runtime state', () => {
+    const currentState = useAuralisStore.getState();
+    const merged = mergePersistedAuralisState(
+      {
+        presets: [createPersistedPreset('preset-restored')],
+        isRecording: true,
+        isBinauralMode: true,
+        timerDuration: 900,
+        timerRemaining: 450,
+        activePresetId: 'preset-restored',
+        activePresetName: 'Injected preset',
+        activePresetSource: 'shared',
+        isActivePresetModified: true,
+      },
+      currentState
+    );
+
+    expect(merged.presets.some((preset) => preset.id === 'preset-restored')).toBe(true);
+    expect(merged).toMatchObject({
+      isRecording: currentState.isRecording,
+      isBinauralMode: currentState.isBinauralMode,
+      timerDuration: currentState.timerDuration,
+      timerRemaining: currentState.timerRemaining,
+      activePresetId: currentState.activePresetId,
+      activePresetName: currentState.activePresetName,
+      activePresetSource: currentState.activePresetSource,
+      isActivePresetModified: currentState.isActivePresetModified,
+    });
+  });
+
+  it('loads shared binaural intent into ordinary mode', () => {
+    useAuralisStore.getState().applySharedPreset({
+      name: 'Shared Binaural Request',
+      oscillators: [{ frequency: 200 }, { frequency: 206 }],
+      isBinauralMode: true,
+      binauralPreset: '200Hz + 6Hz',
+    });
+
+    expect(useAuralisStore.getState()).toMatchObject({
+      isBinauralMode: false,
+      binauralPreset: null,
+      activePresetName: 'Shared Binaural Request',
+      activePresetSource: 'shared',
+    });
+  });
+
+  it('tracks loaded preset identity and modified state', () => {
+    const store = useAuralisStore.getState();
+
+    store.loadPreset('built-in-alpha-relaxed-focus-10hz');
+
+    expect(useAuralisStore.getState()).toMatchObject({
+      activePresetId: 'built-in-alpha-relaxed-focus-10hz',
+      activePresetName: 'Alpha Relaxed Focus (10Hz)',
+      activePresetSource: 'built-in',
+      isActivePresetModified: false,
+    });
+
+    useAuralisStore.getState().markActivePresetModified();
+    expect(useAuralisStore.getState().isActivePresetModified).toBe(true);
+
+    useAuralisStore.getState().resetToDefaults();
+    expect(useAuralisStore.getState()).toMatchObject({
+      activePresetId: null,
+      activePresetName: null,
+      activePresetSource: null,
+      isActivePresetModified: false,
+    });
   });
 });

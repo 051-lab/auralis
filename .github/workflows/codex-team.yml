@@ -1,0 +1,37 @@
+name: Codex Team Validation
+
+on:
+  push:
+    paths:
+      - "AGENTS.md"
+      - ".codex/**"
+      - ".agents/skills/**"
+      - "docs/agent/**"
+      - "scripts/validate_codex_team.py"
+      - ".github/workflows/codex-team.yml"
+  pull_request:
+    paths:
+      - "AGENTS.md"
+      - ".codex/**"
+      - ".agents/skills/**"
+      - "docs/agent/**"
+      - "scripts/validate_codex_team.py"
+      - ".github/workflows/codex-team.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate Codex team
+        run: python scripts/validate_codex_team.py

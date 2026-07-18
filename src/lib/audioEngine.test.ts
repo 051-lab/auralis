@@ -169,6 +169,7 @@ vi.mock('tone', () => {
 
   class Limiter extends MockNode {
     threshold: MockParam;
+    reduction = 0;
 
     constructor(threshold: number = -1) {
       super();
@@ -242,8 +243,8 @@ vi.mock('tone', () => {
 
 describe('AudioEngine graph integration with Tone mocks', () => {
   it('constructs the expanded fixed master chain and accepts safe control updates', async () => {
-    const { AudioEngine } = await import('./audioEngine');
-    const engine = new AudioEngine();
+    const { getAudioEngine } = await import('./audioEngine');
+    const engine = getAudioEngine();
 
     expect(toneMock.constructed).toContain('Reverb');
     expect(toneMock.constructed).toContain('AutoPanner');
@@ -253,6 +254,7 @@ describe('AudioEngine graph integration with Tone mocks', () => {
     expect(toneMock.constructed).toContain('StereoWidener');
     expect(toneMock.constructed.filter((name) => name === 'Limiter')).toHaveLength(2);
     expect(toneMock.constructed).toContain('Analyser');
+    expect(toneMock.constructed.filter((name) => name === 'Analyser')).toHaveLength(2);
     expect(toneMock.constructed.filter((name) => name === 'Recorder')).toHaveLength(2);
 
     engine.setLimiterThreshold(-3);

@@ -90,6 +90,7 @@ export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
   onTremoloDepthChange,
   onEnvelopeChange,
 }) => {
+  const [advancedMobileOpen, setAdvancedMobileOpen] = React.useState(false);
   const color = COLORS[index];
   const linearFreq = logFrequencyToLinear(frequency, 20, 20000);
   const gainDb = gain <= 0 ? '-∞ dB' : `${(20 * Math.log10(gain)).toFixed(1)} dB`;
@@ -331,22 +332,36 @@ export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
       </div>
 
       <div className="mt-3 border-t border-white/10 pt-3">
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <span className="text-xs font-medium text-slate-400">Advanced</span>
-          <select
-            value={tremoloShape}
-            onChange={(event) => onTremoloShapeChange(event.target.value as WaveformType)}
-            className="rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-[11px] text-slate-200 outline-none focus:border-cyan-400"
-            aria-label={`Oscillator ${index + 1} tremolo shape`}
-          >
-            {WAVEFORMS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.title}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => setAdvancedMobileOpen((open) => !open)}
+          aria-expanded={advancedMobileOpen}
+          aria-controls={`oscillator-${index + 1}-advanced-controls`}
+          className="flex w-full items-center justify-between rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-slate-300 md:hidden"
+        >
+          Advanced Controls
+          <span aria-hidden="true">{advancedMobileOpen ? '−' : '+'}</span>
+        </button>
+        <div
+          id={`oscillator-${index + 1}-advanced-controls`}
+          className={`${advancedMobileOpen ? 'block' : 'hidden'} md:block`}
+        >
+          <div className="mb-2 mt-2 flex items-center justify-between gap-3 md:mt-0">
+            <span className="text-xs font-medium text-slate-400">Advanced</span>
+            <select
+              value={tremoloShape}
+              onChange={(event) => onTremoloShapeChange(event.target.value as WaveformType)}
+              className="rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-[11px] text-slate-200 outline-none focus:border-cyan-400"
+              aria-label={`Oscillator ${index + 1} tremolo shape`}
+            >
+              {WAVEFORMS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.title}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
           <label className="space-y-1 text-xs text-slate-400">
             <span className="flex items-center justify-between">
               Detune <span className={color.accent}>{detuneCents.toFixed(0)}c</span>
@@ -415,6 +430,7 @@ export const OscillatorPanel: React.FC<OscillatorPanelProps> = ({
               aria-label={`Oscillator ${index + 1} release seconds`}
             />
           </label>
+          </div>
         </div>
       </div>
     </div>

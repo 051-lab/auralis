@@ -17,6 +17,7 @@ node_modules/
 # Build artifacts
 .next/
 .next-build/
+*.tsbuildinfo
 dist/
 build/
 target/

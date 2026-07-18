@@ -30,9 +30,9 @@ function getMeterStatus(meter: OutputMeterReading): {
   className: string;
   barClassName: string;
 } {
-  if (meter.isClipping) {
+  if (meter.inputClipRisk) {
     return {
-      label: 'Clip Risk',
+      label: 'Input Clip Risk',
       className: 'border-red-400/30 bg-red-400/10 text-red-300',
       barClassName: 'from-amber-400 via-orange-400 to-red-400',
     };
@@ -68,8 +68,6 @@ export function OutputMeter({ engine, isPlaying, className }: OutputMeterProps) 
 
   useEffect(() => {
     if (!engine || !isPlaying) {
-      setMeter(createSilentOutputMeter());
-      setPeakHoldDb(METER_FLOOR_DB);
       peakHoldTimeRef.current = 0;
       return;
     }
@@ -97,10 +95,12 @@ export function OutputMeter({ engine, isPlaying, className }: OutputMeterProps) 
     };
   }, [engine, isPlaying]);
 
-  const status = getMeterStatus(meter);
-  const rmsPercent = levelToPercent(meter.rmsDb);
-  const peakPercent = levelToPercent(meter.peakDb);
-  const peakHoldPercent = levelToPercent(peakHoldDb);
+  const displayedMeter = engine && isPlaying ? meter : createSilentOutputMeter();
+  const displayedPeakHoldDb = engine && isPlaying ? peakHoldDb : METER_FLOOR_DB;
+  const status = getMeterStatus(displayedMeter);
+  const rmsPercent = levelToPercent(displayedMeter.rmsDb);
+  const peakPercent = levelToPercent(displayedMeter.peakDb);
+  const peakHoldPercent = levelToPercent(displayedPeakHoldDb);
 
   return (
     <div
@@ -116,9 +116,11 @@ export function OutputMeter({ engine, isPlaying, className }: OutputMeterProps) 
           {status.label}
         </span>
       </div>
-      <div className="mb-2 grid grid-cols-2 gap-2 font-mono text-[11px] text-slate-400">
-        <span>RMS {formatDb(meter.rmsDb)}</span>
-        <span className="text-right">Peak {formatDb(meter.peakDb)}</span>
+      <div className="mb-2 grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[11px] text-slate-400">
+        <span>Input {formatDb(displayedMeter.inputPeakDb)}</span>
+        <span className="text-right">Output {formatDb(displayedMeter.outputPeakDb)}</span>
+        <span>RMS {formatDb(displayedMeter.rmsDb)}</span>
+        <span className="text-right">GR {formatDb(displayedMeter.limiterReductionDb)}</span>
       </div>
       <div className="relative h-2.5 overflow-hidden rounded-full bg-slate-800/90">
         <div

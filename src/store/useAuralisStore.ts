@@ -124,12 +124,25 @@ export interface Preset {
   createdAt: number;
 }
 
+export type ActivePresetSource = 'built-in' | 'user' | 'shared';
+
+export interface ActivePresetIdentity {
+  id: string | null;
+  name: string | null;
+  source: ActivePresetSource | null;
+  modified: boolean;
+}
+
 interface AuralisState {
   oscillators: OscillatorState[];
   masterFX: MasterFXState;
   isBinauralMode: boolean;
   binauralPreset: string | null;
   presets: Preset[];
+  activePresetId: string | null;
+  activePresetName: string | null;
+  activePresetSource: ActivePresetSource | null;
+  isActivePresetModified: boolean;
   timerDuration: number | null;
   timerRemaining: number | null;
   isRecording: boolean;
@@ -199,6 +212,8 @@ interface AuralisState {
   loadPreset: (id: string) => void;
   deletePreset: (id: string) => void;
   applySharedPreset: (payload: SharedPresetPayload) => void;
+  markActivePresetModified: () => void;
+  setActivePresetIdentity: (identity: ActivePresetIdentity) => void;
   resetToDefaults: () => void;
 }
 
@@ -218,6 +233,13 @@ const MAX_CREATOR_STORYBOARD_NOTES_LENGTH = 420;
 const MAX_CREATOR_EXPORT_SLUG_LENGTH = 96;
 
 const clamp = clampUnknown;
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
 
 const isWaveformType = (value: unknown): value is WaveformType => {
   return value === 'sine' || value === 'square' || value === 'sawtooth' || value === 'triangle';
@@ -1116,6 +1138,75 @@ const normalizeUserPresets = (presets: Preset[]): Preset[] => {
     .slice(0, MAX_USER_PRESETS);
 };
 
+interface PersistedAuralisState {
+  presets: Preset[];
+}
+
+const readCompatiblePersistedPresets = (persistedState: unknown): Preset[] => {
+  if (!isPlainObject(persistedState) || !Array.isArray(persistedState.presets)) return [];
+
+  const compatiblePresets: Preset[] = [];
+  const seenIds = new Set<string>();
+
+  persistedState.presets.forEach((candidate) => {
+    if (!isPlainObject(candidate)) return;
+
+    const id = typeof candidate.id === 'string' ? candidate.id.trim() : '';
+    const version = candidate.version;
+    const hasCompatibleVersion =
+      version === undefined || version === 1 || version === CURRENT_PRESET_VERSION;
+    const hasCompatibleCoreShape =
+      typeof candidate.name === 'string' &&
+      candidate.name.trim().length > 0 &&
+      Array.isArray(candidate.oscillators) &&
+      candidate.oscillators.length > 0 &&
+      candidate.oscillators.length <= 4 &&
+      candidate.oscillators.every(isPlainObject) &&
+      isPlainObject(candidate.masterFX) &&
+      typeof candidate.createdAt === 'number' &&
+      Number.isFinite(candidate.createdAt);
+
+    if (
+      !id ||
+      id.length > 128 ||
+      id.startsWith('built-in-') ||
+      seenIds.has(id) ||
+      !hasCompatibleVersion ||
+      !hasCompatibleCoreShape
+    ) {
+      return;
+    }
+
+    seenIds.add(id);
+    compatiblePresets.push(normalizePreset({ ...candidate, id }));
+  });
+
+  return normalizeUserPresets(compatiblePresets);
+};
+
+export const migratePersistedAuralisState = (
+  persistedState: unknown,
+  envelopeVersion: number
+): PersistedAuralisState => {
+  if (!Number.isInteger(envelopeVersion) || envelopeVersion < 0 || envelopeVersion > 1) {
+    return { presets: [] };
+  }
+
+  return { presets: readCompatiblePersistedPresets(persistedState) };
+};
+
+export const mergePersistedAuralisState = (
+  persistedState: unknown,
+  currentState: AuralisState
+): AuralisState => {
+  const persisted = migratePersistedAuralisState(persistedState, 1);
+
+  return {
+    ...currentState,
+    presets: mergePresets(persisted.presets),
+  };
+};
+
 export const useAuralisStore = create<AuralisState>()(
   persist(
     (set, get) => ({
@@ -1124,6 +1215,10 @@ export const useAuralisStore = create<AuralisState>()(
       isBinauralMode: false,
       binauralPreset: null,
       presets: mergePresets(),
+      activePresetId: null,
+      activePresetName: null,
+      activePresetSource: null,
+      isActivePresetModified: false,
       timerDuration: null,
       timerRemaining: null,
       isRecording: false,
@@ -1634,6 +1729,10 @@ export const useAuralisStore = create<AuralisState>()(
             newPreset,
             ...normalizeUserPresets(currentState.presets),
           ].slice(0, builtInPresets.length + MAX_USER_PRESETS),
+          activePresetId: newPreset.id,
+          activePresetName: newPreset.name,
+          activePresetSource: 'user',
+          isActivePresetModified: false,
         }));
       },
 
@@ -1657,15 +1756,31 @@ export const useAuralisStore = create<AuralisState>()(
           creatorSession: normalizeCreatorSession(preset.creatorSession),
           isBinauralMode: false,
           binauralPreset: null,
+          activePresetId: preset.id,
+          activePresetName: preset.name,
+          activePresetSource: preset.id.startsWith('built-in-') ? 'built-in' : 'user',
+          isActivePresetModified: false,
         });
       },
 
       deletePreset: (id) =>
-        set((state) => ({
-          presets: id.startsWith('built-in-')
-            ? state.presets
-            : state.presets.filter((preset) => preset.id !== id),
-        })),
+        set((state) => {
+          if (id.startsWith('built-in-')) return state;
+
+          const deletingActivePreset = state.activePresetId === id;
+
+          return {
+            presets: state.presets.filter((preset) => preset.id !== id),
+            ...(deletingActivePreset
+              ? {
+                  activePresetId: null,
+                  activePresetName: null,
+                  activePresetSource: null,
+                  isActivePresetModified: false,
+                }
+              : {}),
+          };
+        }),
 
       applySharedPreset: (payload) => {
         set({
@@ -1685,12 +1800,32 @@ export const useAuralisStore = create<AuralisState>()(
           modulation: normalizeModulation(payload.modulation),
           textureLayer: normalizeTextureLayer(payload.textureLayer),
           creatorSession: normalizeCreatorSession(payload.creatorSession),
-          isBinauralMode:
-            typeof payload.isBinauralMode === 'boolean' ? payload.isBinauralMode : false,
-          binauralPreset:
-            typeof payload.binauralPreset === 'string' ? payload.binauralPreset : null,
+          isBinauralMode: false,
+          binauralPreset: null,
+          activePresetId: null,
+          activePresetName:
+            typeof payload.name === 'string' && payload.name.trim()
+              ? payload.name.trim().slice(0, MAX_PRESET_NAME_LENGTH)
+              : 'Shared Preset',
+          activePresetSource: 'shared',
+          isActivePresetModified: false,
         });
       },
+
+      markActivePresetModified: () =>
+        set((state) => ({
+          isActivePresetModified: state.activePresetName
+            ? true
+            : state.isActivePresetModified,
+        })),
+
+      setActivePresetIdentity: (identity) =>
+        set({
+          activePresetId: identity.id,
+          activePresetName: identity.name,
+          activePresetSource: identity.source,
+          isActivePresetModified: identity.modified,
+        }),
 
       resetToDefaults: () =>
         set({
@@ -1711,22 +1846,20 @@ export const useAuralisStore = create<AuralisState>()(
           textureLayer: cloneTextureLayer(defaultTextureLayer),
           creatorSession: cloneCreatorSession(defaultCreatorSession),
           presets: mergePresets(get().presets),
+          activePresetId: null,
+          activePresetName: null,
+          activePresetSource: null,
+          isActivePresetModified: false,
         }),
     }),
     {
       name: 'auralis-storage',
+      version: 1,
+      migrate: migratePersistedAuralisState,
       partialize: (state) => ({
-        presets: state.presets,
+        presets: normalizeUserPresets(state.presets),
       }),
-      merge: (persistedState, currentState) => {
-        const persisted = persistedState as Partial<AuralisState> | undefined;
-
-        return {
-          ...currentState,
-          ...persisted,
-          presets: mergePresets(persisted?.presets),
-        };
-      },
+      merge: mergePersistedAuralisState,
     }
   )
 );

@@ -5,6 +5,7 @@ import {
   getBinauralGuidance,
   normalizeBinauralBaseFrequency,
   normalizeBinauralBeatFrequency,
+  parseStrictBinauralCarriers,
 } from './binaural';
 
 describe('binaural helpers', () => {
@@ -57,5 +58,30 @@ describe('binaural helpers', () => {
       baseAdjusted: true,
       beatAdjusted: true,
     });
+  });
+
+  it('accepts only strict ordered shared binaural carriers', () => {
+    expect(parseStrictBinauralCarriers([{ frequency: 200 }, { frequency: 240 }])).toMatchObject({
+      baseFrequency: 200,
+      upperFrequency: 240,
+      beatFrequency: 40,
+      baseAdjusted: false,
+      beatAdjusted: false,
+    });
+
+    for (const oscillators of [
+      undefined,
+      [],
+      [{ frequency: 200 }],
+      [{ frequency: Number.NaN }, { frequency: 206 }],
+      [{ frequency: 200 }, { frequency: Number.POSITIVE_INFINITY }],
+      [{ frequency: 240 }, { frequency: 200 }],
+      [{ frequency: 200 }, { frequency: 200.25 }],
+      [{ frequency: 200 }, { frequency: 261 }],
+      [{ frequency: 19 }, { frequency: 25 }],
+      [{ frequency: 19_980 }, { frequency: 20_001 }],
+    ]) {
+      expect(parseStrictBinauralCarriers(oscillators)).toBeNull();
+    }
   });
 });
